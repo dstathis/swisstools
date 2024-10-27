@@ -1,6 +1,7 @@
 package swisstools
 
 import (
+	"errors"
 	"io"
 	"math/rand"
 	"time"
@@ -25,13 +26,17 @@ func NewTournament() Tournament {
 	return tournament
 }
 
-func (t *Tournament) AddPlayer(name string) {
+func (t *Tournament) AddPlayer(name string) error {
+	if name == "" {
+		return errors.New("empty name")
+	}
 	t.lastId++
 	player := Player{}
 	player.points = 0
 	player.name = name
 	player.notes = []string{}
 	t.players[t.lastId] = player
+	return nil
 }
 
 func (t *Tournament) FormatPlayers(w io.Writer) {
