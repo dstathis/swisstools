@@ -9,7 +9,7 @@ import (
 )
 
 type Tournament struct {
-	lastId       int
+	lastId       int // Most recent player id to be assigned.
 	players      map[int]Player
 	currentRound int
 	rounds       []Round
