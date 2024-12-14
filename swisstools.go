@@ -79,20 +79,23 @@ func (t *Tournament) Pair() {
 	}
 }
 
-func (t *Tournament) AddResult(id int, wins int, losses int, draws int) {
+func (t *Tournament) AddResult(id int, wins int, losses int, draws int) error {
 	round := t.rounds[t.currentRound]
 	for i, players := range round.pairings {
 		if players[0] == id {
 			round.results[i][0] = wins
 			round.results[i][1] = losses
 			round.results[i][2] = draws
+			return nil
 		}
 		if players[1] == id {
 			round.results[i][1] = wins
 			round.results[i][0] = losses
 			round.results[i][2] = draws
+			return nil
 		}
 	}
+	return errors.New("player not found")
 }
 
 func (t *Tournament) GetPairings() [][2]int {
