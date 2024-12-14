@@ -61,6 +61,7 @@ func (t *Tournament) Pair() {
 	for len(players) > 0 {
 		if len(players) == 1 {
 			round.pairings = append(round.pairings, [2]int{players[0], -1})
+			round.results = append(round.results, [3]int{2, 0, 0})
 			players = players[:0]
 		} else {
 			// Choose 2 random players and delete them from the list.
@@ -73,6 +74,23 @@ func (t *Tournament) Pair() {
 			players[playerIndex] = players[len(players)-1]
 			players = players[:len(players)-1]
 			round.pairings = append(round.pairings, [2]int{player0, player1})
+			round.results = append(round.results, [3]int{-1, -1, -1})
+		}
+	}
+}
+
+func (t *Tournament) AddResult(id int, wins int, losses int, draws int) {
+	round := t.rounds[t.currentRound]
+	for i, players := range round.pairings {
+		if players[0] == id {
+			round.results[i][0] = wins
+			round.results[i][1] = losses
+			round.results[i][2] = draws
+		}
+		if players[1] == id {
+			round.results[i][1] = wins
+			round.results[i][0] = losses
+			round.results[i][2] = draws
 		}
 	}
 }
@@ -81,9 +99,13 @@ func (t *Tournament) GetPairings() [][2]int {
 	return t.rounds[t.currentRound].pairings
 }
 
+func (t *Tournament) GetResults() [][3]int {
+	return t.rounds[t.currentRound].results
+}
+
 type Round struct {
 	pairings [][2]int
-	results  []bool // Boolean values here represent the index of the player that won.
+	results  [][3]int // [<first player wins>, <second player wins>, <draws>]
 }
 
 type Player struct {
