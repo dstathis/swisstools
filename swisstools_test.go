@@ -19,3 +19,11 @@ func TestAddPlayerEmpty(t *testing.T) {
 		t.Fatalf("No name provided but AddPlayer did not return an error.")
 	}
 }
+
+func TestAddResultBadId(t *testing.T) {
+	tournament := NewTournament()
+	err := tournament.AddResult(5, 2, 1, 0)
+	if err == nil {
+		t.Fatal("Bogus player submitted result but AddResult did not return an error.")
+	}
+}
