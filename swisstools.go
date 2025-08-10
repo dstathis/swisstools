@@ -9,6 +9,23 @@ import (
 	"github.com/olekukonko/tablewriter"
 )
 
+// Tournament constants
+const (
+	// Special player IDs and values
+	BYE_OPPONENT_ID      = -1 // Player ID indicating a bye (no opponent)
+	UNINITIALIZED_RESULT = -1 // Initial value for unset match results
+
+	// Bye round scoring (tournament standard)
+	BYE_WINS   = 2 // Games won when receiving a bye
+	BYE_LOSSES = 0 // Games lost when receiving a bye
+	BYE_DRAWS  = 0 // Games drawn when receiving a bye
+
+	// Points system (tournament standard)
+	POINTS_FOR_WIN  = 3 // Match points awarded for a win
+	POINTS_FOR_DRAW = 1 // Match points awarded for a draw
+	POINTS_FOR_LOSS = 0 // Match points awarded for a loss (explicit for clarity)
+)
+
 type Tournament struct {
 	lastId       int // Most recent player id to be assigned.
 	players      map[int]Player
@@ -49,10 +66,11 @@ func (t *Tournament) AddPlayer(name string) error {
 		return errors.New("empty name")
 	}
 	t.lastId++
-	player := Player{}
-	player.points = 0
-	player.name = name
-	player.notes = []string{}
+	player := Player{
+		name:  name,
+		notes: []string{},
+		// points, wins, losses, draws are zero-initialized by Go
+	}
 	t.players[t.lastId] = player
 	return nil
 }
@@ -99,7 +117,7 @@ func (t *Tournament) Pair() {
 		if len(players) == 1 {
 			// Handle bye - last remaining player gets a bye
 			t.rounds[t.currentRound] = append(t.rounds[t.currentRound],
-				Pairing{playera: players[0], playerb: -1, playeraWins: 2, playerbWins: 0, draws: 0})
+				Pairing{playera: players[0], playerb: BYE_OPPONENT_ID, playeraWins: BYE_WINS, playerbWins: BYE_LOSSES, draws: BYE_DRAWS})
 			break
 		}
 
@@ -110,7 +128,7 @@ func (t *Tournament) Pair() {
 
 		// Create pairing between the two selected players
 		t.rounds[t.currentRound] = append(t.rounds[t.currentRound],
-			Pairing{playera: player0, playerb: player1, playeraWins: -1, playerbWins: -1, draws: -1})
+			Pairing{playera: player0, playerb: player1, playeraWins: UNINITIALIZED_RESULT, playerbWins: UNINITIALIZED_RESULT, draws: UNINITIALIZED_RESULT})
 	}
 }
 
@@ -180,20 +198,20 @@ func (t *Tournament) UpdatePlayerStandings() error {
 
 	// FIRST PASS: Validate all matches are complete before updating any stats
 	for _, pairing := range t.rounds[t.currentRound] {
-		// Check for incomplete matches (initialized with -1)
-		if pairing.playeraWins == -1 || pairing.playerbWins == -1 || pairing.draws == -1 {
+		// Check for incomplete matches (initialized with UNINITIALIZED_RESULT)
+		if pairing.playeraWins == UNINITIALIZED_RESULT || pairing.playerbWins == UNINITIALIZED_RESULT || pairing.draws == UNINITIALIZED_RESULT {
 			return errors.New("incomplete match found - all matches must have results")
 		}
 	}
 
 	// SECOND PASS: All matches are complete, now update player stats
 	for _, pairing := range t.rounds[t.currentRound] {
-		// Handle bye rounds (playerb == -1)
-		if pairing.playerb == -1 {
-			// Player gets a bye - worth 3 points (match win)
+		// Handle bye rounds (playerb == BYE_OPPONENT_ID)
+		if pairing.playerb == BYE_OPPONENT_ID {
+			// Player gets a bye - worth POINTS_FOR_WIN (match win)
 			playerA := t.players[pairing.playera]
 			playerA.wins++
-			playerA.points += 3
+			playerA.points += POINTS_FOR_WIN
 			t.players[pairing.playera] = playerA
 			continue
 		}
@@ -205,19 +223,21 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		if pairing.playeraWins > pairing.playerbWins {
 			// Player A wins the match
 			playerA.wins++
-			playerA.points += 3 // 3 points for a win
+			playerA.points += POINTS_FOR_WIN
 			playerB.losses++
+			playerB.points += POINTS_FOR_LOSS // Explicit for clarity (currently 0)
 		} else if pairing.playerbWins > pairing.playeraWins {
 			// Player B wins the match
 			playerB.wins++
-			playerB.points += 3 // 3 points for a win
+			playerB.points += POINTS_FOR_WIN
 			playerA.losses++
+			playerA.points += POINTS_FOR_LOSS // Explicit for clarity (currently 0)
 		} else {
 			// Match is drawn (equal games won, or both 0 with draws > 0)
 			playerA.draws++
-			playerA.points += 1 // 1 point for a draw
+			playerA.points += POINTS_FOR_DRAW
 			playerB.draws++
-			playerB.points += 1 // 1 point for a draw
+			playerB.points += POINTS_FOR_DRAW
 		}
 
 		// Update players in the map
