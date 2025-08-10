@@ -2,6 +2,7 @@ package swisstools
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 
@@ -18,6 +19,9 @@ type Tournament struct {
 type Player struct {
 	name   string
 	points int
+	wins   int
+	losses int
+	draws  int
 	notes  []string
 }
 
@@ -57,17 +61,27 @@ func (t *Tournament) FormatPlayers(w io.Writer) {
 	table := tablewriter.NewWriter(w)
 	table.SetHeader([]string{"Name", "Wins", "Losses", "Points"})
 	for _, player := range t.players {
-		table.Append([]string{player.name, "0", "0", "0"})
+		table.Append([]string{
+			player.name,
+			fmt.Sprintf("%d", player.wins),
+			fmt.Sprintf("%d", player.losses),
+			fmt.Sprintf("%d", player.points),
+		})
 	}
 	table.Render()
 }
 
-func (t *Tournament) NextRound() {
+func (t *Tournament) NextRound() error {
+	err := t.UpdatePlayerStandings()
+	if err != nil {
+		return err
+	}
 	t.currentRound++
 	// Ensure the rounds slice has capacity for the new round
 	for len(t.rounds) <= t.currentRound {
 		t.rounds = append(t.rounds, Round{})
 	}
+	return nil
 }
 
 func (t *Tournament) Pair() {
@@ -131,4 +145,68 @@ func (t *Tournament) GetRound() []Pairing {
 		return []Pairing{} // Return empty slice if round not initialized
 	}
 	return t.rounds[t.currentRound]
+}
+
+// UpdatePlayerStandings processes the current round's pairings and updates player statistics.
+// It calculates match wins/losses/draws and points based on game results within each pairing.
+// Statistics are cumulative - this function adds to existing player stats.
+// Returns an error if any matches in the current round are incomplete (have unset results).
+// All matches must be complete before any player stats are updated (atomic operation).
+func (t *Tournament) UpdatePlayerStandings() error {
+	// Defensive check: ensure current round exists and has pairings
+	if t.currentRound >= len(t.rounds) {
+		return errors.New("round not initialized - call Pair() first")
+	}
+	if len(t.rounds[t.currentRound]) == 0 {
+		return errors.New("round has no pairings - call Pair() first")
+	}
+
+	// FIRST PASS: Validate all matches are complete before updating any stats
+	for _, pairing := range t.rounds[t.currentRound] {
+		// Check for incomplete matches (initialized with -1)
+		if pairing.playeraWins == -1 || pairing.playerbWins == -1 || pairing.draws == -1 {
+			return errors.New("incomplete match found - all matches must have results")
+		}
+	}
+
+	// SECOND PASS: All matches are complete, now update player stats
+	for _, pairing := range t.rounds[t.currentRound] {
+		// Handle bye rounds (playerb == -1)
+		if pairing.playerb == -1 {
+			// Player gets a bye - worth 3 points (match win)
+			playerA := t.players[pairing.playera]
+			playerA.wins++
+			playerA.points += 3
+			t.players[pairing.playera] = playerA
+			continue
+		}
+
+		// Determine match winner based on game results
+		playerA := t.players[pairing.playera]
+		playerB := t.players[pairing.playerb]
+
+		if pairing.playeraWins > pairing.playerbWins {
+			// Player A wins the match
+			playerA.wins++
+			playerA.points += 3 // 3 points for a win
+			playerB.losses++
+		} else if pairing.playerbWins > pairing.playeraWins {
+			// Player B wins the match
+			playerB.wins++
+			playerB.points += 3 // 3 points for a win
+			playerA.losses++
+		} else {
+			// Match is drawn (equal games won, or both 0 with draws > 0)
+			playerA.draws++
+			playerA.points += 1 // 1 point for a draw
+			playerB.draws++
+			playerB.points += 1 // 1 point for a draw
+		}
+
+		// Update players in the map
+		t.players[pairing.playera] = playerA
+		t.players[pairing.playerb] = playerB
+	}
+
+	return nil
 }
