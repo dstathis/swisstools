@@ -207,6 +207,8 @@ func (t *Tournament) UpdatePlayerStandings() error {
 	// SECOND PASS: All matches are complete, now update player stats
 	for _, pairing := range t.rounds[t.currentRound] {
 		// Handle bye rounds (playerb == BYE_OPPONENT_ID)
+		// Byes must be handled separately because there's no opponent to update,
+		// and the bye player automatically gets a match win with predetermined game scores
 		if pairing.playerb == BYE_OPPONENT_ID {
 			// Player gets a bye - worth POINTS_FOR_WIN (match win)
 			playerA := t.players[pairing.playera]
