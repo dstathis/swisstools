@@ -94,23 +94,40 @@ func (t *Tournament) Pair() {
 	for id, _ := range t.players {
 		players = append(players, id)
 	}
+
 	for len(players) > 0 {
 		if len(players) == 1 {
-			t.rounds[t.currentRound] = append(t.rounds[t.currentRound], Pairing{playera: players[0], playerb: -1, playeraWins: 2, playerbWins: 0, draws: 0})
-			players = players[:0]
-		} else {
-			// Choose 2 random players and delete them from the list.
-			playerIndex := rand.Intn(len(players))
-			player0 := players[playerIndex]
-			players[playerIndex] = players[len(players)-1]
-			players = players[:len(players)-1]
-			playerIndex = rand.Intn(len(players))
-			player1 := players[playerIndex]
-			players[playerIndex] = players[len(players)-1]
-			players = players[:len(players)-1]
-			t.rounds[t.currentRound] = append(t.rounds[t.currentRound], Pairing{playera: player0, playerb: player1, playeraWins: -1, playerbWins: -1, draws: -1})
+			// Handle bye - last remaining player gets a bye
+			t.rounds[t.currentRound] = append(t.rounds[t.currentRound],
+				Pairing{playera: players[0], playerb: -1, playeraWins: 2, playerbWins: 0, draws: 0})
+			break
 		}
+
+		// Pick two random players using helper function
+		player0, remainingPlayers := removeRandomPlayer(players)
+		player1, finalPlayers := removeRandomPlayer(remainingPlayers)
+		players = finalPlayers
+
+		// Create pairing between the two selected players
+		t.rounds[t.currentRound] = append(t.rounds[t.currentRound],
+			Pairing{playera: player0, playerb: player1, playeraWins: -1, playerbWins: -1, draws: -1})
 	}
+}
+
+// removeRandomPlayer selects a random player from the slice and returns both
+// the selected player and a new slice with that player removed.
+func removeRandomPlayer(players []int) (int, []int) {
+	if len(players) == 0 {
+		panic("cannot remove player from empty slice")
+	}
+
+	// Pick random index
+	index := rand.Intn(len(players))
+	selectedPlayer := players[index]
+
+	// Swap selected player with last element and shrink slice
+	players[index] = players[len(players)-1]
+	return selectedPlayer, players[:len(players)-1]
 }
 
 func (t *Tournament) AddResult(id int, wins int, losses int, draws int) error {
