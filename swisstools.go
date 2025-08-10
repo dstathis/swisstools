@@ -37,8 +37,8 @@ func NewTournament() Tournament {
 	tournament := Tournament{}
 	tournament.lastId = 0
 	tournament.players = map[int]Player{}
-	tournament.currentRound = 1 // Index round starting with 1 to make the round numbers human readable.
-	tournament.rounds = make([]Round, 2)
+	tournament.currentRound = 1          // Index round starting with 1 to make the round numbers human readable.
+	tournament.rounds = make([]Round, 2) // Initialize with capacity for rounds 0 and 1
 	return tournament
 }
 
@@ -66,9 +66,18 @@ func (t *Tournament) FormatPlayers(w io.Writer) {
 
 func (t *Tournament) NextRound() {
 	t.currentRound++
+	// Ensure the rounds slice has capacity for the new round
+	for len(t.rounds) <= t.currentRound {
+		t.rounds = append(t.rounds, Round{})
+	}
 }
 
 func (t *Tournament) Pair() {
+	// Clear any existing pairings for this round to allow re-pairing
+	if t.currentRound < len(t.rounds) {
+		t.rounds[t.currentRound] = Round{}
+	}
+
 	players := []int{}
 	for id, _ := range t.players {
 		players = append(players, id)
@@ -93,6 +102,14 @@ func (t *Tournament) Pair() {
 }
 
 func (t *Tournament) AddResult(id int, wins int, losses int, draws int) error {
+	// Defensive check: ensure round exists and has been paired
+	if t.currentRound >= len(t.rounds) {
+		return errors.New("round not initialized - call NextRound() first")
+	}
+	if len(t.rounds[t.currentRound]) == 0 {
+		return errors.New("round has no pairings - call Pair() first")
+	}
+
 	for i, pairing := range t.rounds[t.currentRound] {
 		if pairing.playera == id {
 			t.rounds[t.currentRound][i].playeraWins = wins
@@ -111,5 +128,9 @@ func (t *Tournament) AddResult(id int, wins int, losses int, draws int) error {
 }
 
 func (t *Tournament) GetRound() []Pairing {
+	// Defensive check - should not happen with proper NextRound() usage
+	if t.currentRound >= len(t.rounds) {
+		return []Pairing{} // Return empty slice if round not initialized
+	}
 	return t.rounds[t.currentRound]
 }
