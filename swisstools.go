@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"math/rand"
-	"time"
 
 	"github.com/olekukonko/tablewriter"
 )
@@ -33,7 +32,6 @@ type Pairing struct {
 type Round = []Pairing
 
 func NewTournament() Tournament {
-	rand.Seed(time.Now().Unix())
 	tournament := Tournament{}
 	tournament.lastId = 0
 	tournament.players = map[int]Player{}
