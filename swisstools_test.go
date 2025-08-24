@@ -39,7 +39,7 @@ func TestMultipleRounds(t *testing.T) {
 
 	// Test multiple rounds to ensure dynamic growth works
 	for round := 1; round <= 5; round++ {
-		tournament.Pair()
+		tournament.Pair(false)
 
 		// Add results for all pairings in this round
 		pairings := tournament.GetRound()
@@ -70,14 +70,14 @@ func TestPairRePairing(t *testing.T) {
 	tournament.AddPlayer("Bob")
 
 	// First pairing should work
-	tournament.Pair()
+	tournament.Pair(false)
 	round1 := tournament.GetRound()
 	if len(round1) == 0 {
 		t.Fatal("Expected pairings in round 1")
 	}
 
 	// Re-pairing the same round should work and clear previous pairings
-	tournament.Pair()
+	tournament.Pair(false)
 	round1After := tournament.GetRound()
 	if len(round1After) == 0 {
 		t.Fatal("Expected pairings after re-pairing round 1")
@@ -98,7 +98,7 @@ func TestPairRePairing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to advance to next round: %v", err)
 	}
-	tournament.Pair()
+	tournament.Pair(false)
 	round2 := tournament.GetRound()
 	if len(round2) == 0 {
 		t.Fatal("Expected pairings in round 2")
@@ -122,7 +122,7 @@ func TestAddResultWithoutPairing(t *testing.T) {
 	}
 
 	// Pair the round so we can advance, but don't add results
-	tournament.Pair()
+	tournament.Pair(false)
 
 	// Try to advance to next round without adding results - should fail
 	err = tournament.NextRound()
@@ -153,7 +153,7 @@ func TestUpdatePlayerStandings(t *testing.T) {
 	tournament.AddPlayer("Charlie") // ID: 3
 
 	// Pair and see what we get (random pairing)
-	tournament.Pair()
+	tournament.Pair(false)
 	pairings := tournament.GetRound()
 
 	// Add results for all non-bye pairings
@@ -212,7 +212,7 @@ func TestUpdatePlayerStandingsCumulative(t *testing.T) {
 	tournament.AddPlayer("Bob")   // ID: 2
 
 	// Round 1: Alice beats Bob
-	tournament.Pair()
+	tournament.Pair(false)
 	err := tournament.AddResult(1, 2, 0, 0) // Alice wins 2-0
 	if err != nil {
 		t.Fatalf("Failed to add result: %v", err)
@@ -233,7 +233,7 @@ func TestUpdatePlayerStandingsCumulative(t *testing.T) {
 	if bob.losses != 1 || bob.points != 0 {
 		t.Errorf("After round 1: Bob should have 1 loss, 0 points, got losses=%d, points=%d", bob.losses, bob.points)
 	}
-	tournament.Pair()
+	tournament.Pair(false)
 	err = tournament.AddResult(2, 2, 1, 0) // Bob wins 2-1
 	if err != nil {
 		t.Fatalf("Failed to add result: %v", err)
@@ -264,7 +264,7 @@ func TestUpdatePlayerStandingsIncompleteMatch(t *testing.T) {
 	tournament.AddPlayer("Bob")
 
 	// Pair but don't add results
-	tournament.Pair()
+	tournament.Pair(false)
 
 	// Should error due to incomplete match
 	err := tournament.UpdatePlayerStandings()
@@ -281,7 +281,7 @@ func TestUpdatePlayerStandingsDraws(t *testing.T) {
 	tournament.AddPlayer("Alice")
 	tournament.AddPlayer("Bob")
 
-	tournament.Pair()
+	tournament.Pair(false)
 	// Set up a drawn match (equal game wins)
 	err := tournament.AddResult(1, 1, 1, 1) // Alice and Bob each win 1 game, 1 draw
 	if err != nil {
@@ -310,7 +310,7 @@ func TestFormatPlayersWithActualData(t *testing.T) {
 	tournament.AddPlayer("Alice")
 	tournament.AddPlayer("Bob")
 
-	tournament.Pair()
+	tournament.Pair(false)
 	// Alice wins 2-0
 	err := tournament.AddResult(1, 2, 0, 0)
 	if err != nil {
@@ -351,7 +351,7 @@ func TestUpdatePlayerStandingsAtomic(t *testing.T) {
 		}
 	}
 
-	tournament.Pair()
+	tournament.Pair(false)
 	pairings := tournament.GetRound()
 
 	// Add results for only SOME pairings, leaving others incomplete
@@ -395,7 +395,7 @@ func TestCorrectPointsSystem(t *testing.T) {
 	tournament.AddPlayer("Charlie") // ID: 3
 
 	// Test wins and draws with correct points
-	tournament.Pair()
+	tournament.Pair(false)
 	pairings := tournament.GetRound()
 
 	// Set up specific results to test points system
@@ -415,7 +415,7 @@ func TestCorrectPointsSystem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to advance to next round: %v", err)
 	}
-	tournament.Pair()
+	tournament.Pair(false)
 
 	// Add a draw result
 	pairings = tournament.GetRound()
@@ -471,7 +471,7 @@ func TestPairWithNoPlayers(t *testing.T) {
 	// Don't add any players
 
 	// This should handle the empty players case gracefully
-	tournament.Pair()
+	tournament.Pair(false)
 
 	// Check that no pairings were created
 	pairings := tournament.GetRound()
@@ -500,7 +500,7 @@ func TestAddResultPlayerB(t *testing.T) {
 	tournament.AddPlayer("Alice")
 	tournament.AddPlayer("Bob")
 
-	tournament.Pair()
+	tournament.Pair(false)
 
 	// Get the pairing to find player IDs
 	pairings := tournament.GetRound()
@@ -527,7 +527,7 @@ func TestAddResultPlayerNotFound(t *testing.T) {
 	tournament.AddPlayer("Alice")
 	tournament.AddPlayer("Bob")
 
-	tournament.Pair()
+	tournament.Pair(false)
 
 	// Try to add result for non-existent player
 	err := tournament.AddResult(999, 2, 1, 0)
@@ -593,7 +593,7 @@ func TestUpdatePlayerStandingsAllBranches(t *testing.T) {
 	tournament.AddPlayer("Bob")
 	tournament.AddPlayer("Charlie")
 
-	tournament.Pair()
+	tournament.Pair(false)
 
 	// Get pairings to set up specific win/loss scenarios
 	pairings := tournament.GetRound()
@@ -622,7 +622,7 @@ func TestUpdatePlayerStandingsTrueDrawScenario(t *testing.T) {
 	tournament.AddPlayer("Alice")
 	tournament.AddPlayer("Bob")
 
-	tournament.Pair()
+	tournament.Pair(false)
 
 	// Create a scenario where both players have the same number of wins (1-1 with draws)
 	pairings := tournament.GetRound()
@@ -637,4 +637,74 @@ func TestUpdatePlayerStandingsTrueDrawScenario(t *testing.T) {
 			t.Fatalf("Failed to update standings: %v", err)
 		}
 	}
+}
+
+func TestPairErrorHandling(t *testing.T) {
+	// Test pairing with no players
+	tournament := NewTournament()
+	err := tournament.Pair(false)
+	if err == nil {
+		t.Fatal("Expected error when pairing tournament with no players")
+	}
+	if err.Error() != "cannot pair tournament with no players" {
+		t.Errorf("Expected specific error message, got: %v", err)
+	}
+
+	// Test pairing with invalid tournament state
+	tournament = NewTournament()
+	tournament.currentRound = 0 // Invalid state
+	tournament.AddPlayer("Alice")
+	err = tournament.Pair(false)
+	if err == nil {
+		t.Fatal("Expected error when pairing with invalid tournament state")
+	}
+	if err.Error() != "invalid tournament state: current round must be >= 1" {
+		t.Errorf("Expected specific error message, got: %v", err)
+	}
+
+	// Test that pairing works with valid state
+	tournament = NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	err = tournament.Pair(false)
+	if err != nil {
+		t.Fatalf("Expected no error when pairing valid tournament, got: %v", err)
+	}
+
+	t.Log("Pair error handling working correctly")
+}
+
+func TestPairRepairFunctionality(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+
+	// First pairing should work
+	err := tournament.Pair(false)
+	if err != nil {
+		t.Fatalf("First Pair() failed: %v", err)
+	}
+
+	// Second pairing without repair should fail
+	err = tournament.Pair(false)
+	if err == nil {
+		t.Fatal("Expected error when calling Pair() without repair on already paired round")
+	}
+	if err.Error() != "round already has pairings - use Pair(true) to allow re-pairing" {
+		t.Errorf("Expected specific error message, got: %v", err)
+	}
+
+	// Pairing with repair should work
+	err = tournament.Pair(true)
+	if err != nil {
+		t.Fatalf("Pair(true) failed: %v", err)
+	}
+
+	// Verify we have pairings
+	pairings := tournament.GetRound()
+	if len(pairings) == 0 {
+		t.Fatal("Expected pairings after Pair(true)")
+	}
+
+	t.Log("Pair repair functionality working correctly")
 }

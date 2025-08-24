@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"sort"
 
 	"github.com/olekukonko/tablewriter"
 )
@@ -100,36 +101,6 @@ func (t *Tournament) NextRound() error {
 		t.rounds = append(t.rounds, Round{})
 	}
 	return nil
-}
-
-func (t *Tournament) Pair() {
-	// Clear any existing pairings for this round to allow re-pairing
-	if t.currentRound < len(t.rounds) {
-		t.rounds[t.currentRound] = Round{}
-	}
-
-	players := []int{}
-	for id, _ := range t.players {
-		players = append(players, id)
-	}
-
-	for len(players) > 0 {
-		if len(players) == 1 {
-			// Handle bye - last remaining player gets a bye
-			t.rounds[t.currentRound] = append(t.rounds[t.currentRound],
-				Pairing{playera: players[0], playerb: BYE_OPPONENT_ID, playeraWins: BYE_WINS, playerbWins: BYE_LOSSES, draws: BYE_DRAWS})
-			break
-		}
-
-		// Pick two random players using helper function
-		player0, remainingPlayers := removeRandomPlayer(players)
-		player1, finalPlayers := removeRandomPlayer(remainingPlayers)
-		players = finalPlayers
-
-		// Create pairing between the two selected players
-		t.rounds[t.currentRound] = append(t.rounds[t.currentRound],
-			Pairing{playera: player0, playerb: player1, playeraWins: UNINITIALIZED_RESULT, playerbWins: UNINITIALIZED_RESULT, draws: UNINITIALIZED_RESULT})
-	}
 }
 
 // removeRandomPlayer selects a random player from the slice and returns both
@@ -247,5 +218,228 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		t.players[pairing.playerb] = playerB
 	}
 
+	return nil
+}
+
+// Pair implements the proper Swiss tournament pairing algorithm.
+func (t *Tournament) Pair(allowRepair bool) error {
+	// Validate tournament state.
+	if len(t.players) == 0 {
+		return errors.New("cannot pair tournament with no players")
+	}
+
+	if t.currentRound < 1 {
+		return errors.New("invalid tournament state: current round must be >= 1")
+	}
+
+	// Check if round already has pairings
+	if t.currentRound < len(t.rounds) && len(t.rounds[t.currentRound]) > 0 {
+		if !allowRepair {
+			return errors.New("round already has pairings - use Pair(true) to allow re-pairing")
+		}
+		// Clear any existing pairings for this round to allow re-pairing
+		t.rounds[t.currentRound] = Round{}
+	}
+
+	// Get players sorted by points (descending), with random ordering within same point groups
+	players := t.getSortedPlayers()
+
+	// Track which players have been paired
+	paired := make(map[int]bool)
+	var pairings []Pairing
+
+	// First round: random pairing
+	if t.currentRound == 1 {
+		return t.randomPair()
+	}
+
+	// Subsequent rounds: Swiss pairing
+	for i := 0; i < len(players); i++ {
+		if paired[players[i]] {
+			continue
+		}
+
+		// Find best available opponent
+		opponent := t.findBestOpponent(players[i], players, paired)
+
+		if opponent != -1 {
+			// Create pairing
+			pairings = append(pairings, Pairing{
+				playera:     players[i],
+				playerb:     opponent,
+				playeraWins: UNINITIALIZED_RESULT,
+				playerbWins: UNINITIALIZED_RESULT,
+				draws:       UNINITIALIZED_RESULT,
+			})
+			paired[players[i]] = true
+			paired[opponent] = true
+		} else {
+			// No opponent found, give bye
+			pairings = append(pairings, Pairing{
+				playera:     players[i],
+				playerb:     BYE_OPPONENT_ID,
+				playeraWins: BYE_WINS,
+				playerbWins: BYE_LOSSES,
+				draws:       BYE_DRAWS,
+			})
+			paired[players[i]] = true
+		}
+	}
+
+	t.rounds[t.currentRound] = pairings
+	return nil
+}
+
+// getSortedPlayers returns player IDs sorted by points (descending), with random ordering within same point groups
+func (t *Tournament) getSortedPlayers() []int {
+	var players []int
+	for id := range t.players {
+		players = append(players, id)
+	}
+
+	// Sort by points (descending) only
+	sort.Slice(players, func(i, j int) bool {
+		playerI := t.players[players[i]]
+		playerJ := t.players[players[j]]
+		return playerI.points > playerJ.points
+	})
+
+	// Randomize players within same point groups
+	t.randomizeWithinPointGroups(players)
+
+	return players
+}
+
+// randomizeWithinPointGroups randomizes the order of players within the same point groups
+func (t *Tournament) randomizeWithinPointGroups(players []int) {
+	if len(players) <= 1 {
+		return
+	}
+
+	start := 0
+	currentPoints := t.players[players[0]].points
+
+	for i := 1; i < len(players); i++ {
+		if t.players[players[i]].points != currentPoints {
+			// Randomize the group from start to i-1
+			if i-start > 1 {
+				shufflePlayers(players[start:i])
+			}
+			start = i
+			currentPoints = t.players[players[i]].points
+		}
+	}
+
+	// Don't forget the last group
+	if len(players)-start > 1 {
+		shufflePlayers(players[start:])
+	}
+}
+
+// shufflePlayers randomly shuffles a slice of player IDs
+func shufflePlayers(players []int) {
+	for i := len(players) - 1; i > 0; i-- {
+		j := rand.Intn(i + 1)
+		players[i], players[j] = players[j], players[i]
+	}
+}
+
+// findBestOpponent finds the best available opponent for a player
+func (t *Tournament) findBestOpponent(playerID int, sortedPlayers []int, paired map[int]bool) int {
+	player := t.players[playerID]
+
+	// Look for opponents with same points first
+	for _, opponentID := range sortedPlayers {
+		if opponentID == playerID || paired[opponentID] {
+			continue
+		}
+
+		if t.players[opponentID].points == player.points && !t.havePlayedBefore(playerID, opponentID) {
+			return opponentID
+		}
+	}
+
+	// If no same-point opponent, look for closest points
+	for _, opponentID := range sortedPlayers {
+		if opponentID == playerID || paired[opponentID] {
+			continue
+		}
+
+		if !t.havePlayedBefore(playerID, opponentID) {
+			return opponentID
+		}
+	}
+
+	// If no opponent found without rematch, allow rematch as last resort
+	for _, opponentID := range sortedPlayers {
+		if opponentID == playerID || paired[opponentID] {
+			continue
+		}
+
+		return opponentID
+	}
+
+	return -1 // No suitable opponent found
+}
+
+// havePlayedBefore checks if two players have played against each other in previous rounds
+func (t *Tournament) havePlayedBefore(playerA, playerB int) bool {
+	for round := 1; round < t.currentRound; round++ {
+		if round >= len(t.rounds) {
+			continue
+		}
+
+		for _, pairing := range t.rounds[round] {
+			if (pairing.playera == playerA && pairing.playerb == playerB) ||
+				(pairing.playera == playerB && pairing.playerb == playerA) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// randomPair implements the original random pairing logic
+func (t *Tournament) randomPair() error {
+	// Validate that we have players to pair
+	if len(t.players) == 0 {
+		return errors.New("cannot create random pairings with no players")
+	}
+
+	players := []int{}
+	for id := range t.players {
+		players = append(players, id)
+	}
+
+	var pairings []Pairing
+	for len(players) > 0 {
+		if len(players) == 1 {
+			// Handle bye - last remaining player gets a bye
+			pairings = append(pairings, Pairing{
+				playera:     players[0],
+				playerb:     BYE_OPPONENT_ID,
+				playeraWins: BYE_WINS,
+				playerbWins: BYE_LOSSES,
+				draws:       BYE_DRAWS,
+			})
+			break
+		}
+
+		// Pick two random players using helper function
+		player0, remainingPlayers := removeRandomPlayer(players)
+		player1, finalPlayers := removeRandomPlayer(remainingPlayers)
+		players = finalPlayers
+
+		// Create pairing between the two selected players
+		pairings = append(pairings, Pairing{
+			playera:     player0,
+			playerb:     player1,
+			playeraWins: UNINITIALIZED_RESULT,
+			playerbWins: UNINITIALIZED_RESULT,
+			draws:       UNINITIALIZED_RESULT,
+		})
+	}
+
+	t.rounds[t.currentRound] = pairings
 	return nil
 }
