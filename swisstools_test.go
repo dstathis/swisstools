@@ -708,3 +708,402 @@ func TestPairRepairFunctionality(t *testing.T) {
 
 	t.Log("Pair repair functionality working correctly")
 }
+
+func TestTournamentConfiguration(t *testing.T) {
+	// Test custom configuration
+	config := TournamentConfig{
+		PointsForWin:  4,
+		PointsForDraw: 2,
+		PointsForLoss: 1,
+		ByeWins:       3,
+		ByeLosses:     0,
+		ByeDraws:      0,
+	}
+
+	tournament := NewTournamentWithConfig(config)
+
+	// Test that tournament can start with any number of players > 0
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+
+	// Should be able to start with 3 players
+	if tournament.GetStatus() != "setup" {
+		t.Error("Expected tournament to be in setup status")
+	}
+
+	err := tournament.StartTournament()
+	if err != nil {
+		t.Fatalf("Failed to start tournament: %v", err)
+	}
+
+	// Verify tournament started
+	if tournament.GetStatus() != "in_progress" {
+		t.Error("Expected tournament to be in progress")
+	}
+
+	if tournament.GetStatus() != "in_progress" {
+		t.Errorf("Expected status 'in_progress', got '%s'", tournament.GetStatus())
+	}
+
+	t.Log("Tournament configuration working correctly")
+}
+
+func TestTournamentStateManagement(t *testing.T) {
+	tournament := NewTournament()
+
+	// Initial state
+	if tournament.GetStatus() != "setup" {
+		t.Errorf("Expected initial status 'setup', got '%s'", tournament.GetStatus())
+	}
+
+	// Add players and start
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+	tournament.AddPlayer("Diana")
+
+	err := tournament.StartTournament()
+	if err != nil {
+		t.Fatalf("Failed to start tournament: %v", err)
+	}
+
+	// Verify started state
+	if tournament.GetStatus() != "in_progress" {
+		t.Error("Expected tournament to be in progress")
+	}
+
+	if tournament.GetStatus() != "in_progress" {
+		t.Errorf("Expected status 'in_progress', got '%s'", tournament.GetStatus())
+	}
+
+	// Test player management
+	player, exists := tournament.GetPlayerById(1)
+	if !exists {
+		t.Error("Expected player 1 to exist")
+	}
+	if player.name != "Alice" {
+		t.Errorf("Expected player 1 to be Alice, got %s", player.name)
+	}
+
+	id, exists := tournament.GetPlayerID("Bob")
+	if !exists {
+		t.Error("Expected to find Bob by name")
+	}
+	if id != 2 {
+		t.Errorf("Expected Bob to have ID 2, got %d", id)
+	}
+
+	// Test removing player before start
+	tournament2 := NewTournament()
+	tournament2.AddPlayer("Alice")
+	tournament2.AddPlayer("Bob")
+
+	err = tournament2.RemovePlayerById(1)
+	if err != nil {
+		t.Fatalf("Failed to remove player: %v", err)
+	}
+
+	// Player should still exist but be marked as removed
+	if tournament2.GetPlayerCount() != 2 {
+		t.Errorf("Expected 2 players after removal (history preserved), got %d", tournament2.GetPlayerCount())
+	}
+
+	// Check that player is marked as removed
+	player, exists = tournament2.GetPlayerById(1)
+	if !exists {
+		t.Error("Player should still exist after removal")
+	}
+
+	hasRemovedNote := false
+	for _, note := range player.notes {
+		if strings.Contains(note, "Removed") {
+			hasRemovedNote = true
+			break
+		}
+	}
+	if !hasRemovedNote {
+		t.Error("Expected removed note for player")
+	}
+
+	// Test removing player after start (should work now)
+	err = tournament.RemovePlayerById(1)
+	if err != nil {
+		t.Errorf("Expected to be able to remove player after tournament started: %v", err)
+	}
+
+	t.Log("Tournament state management working correctly")
+}
+
+func TestPlayerManagementDuringTournament(t *testing.T) {
+	tournament := NewTournament()
+
+	// Add initial players and start tournament
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+	tournament.AddPlayer("Diana")
+
+	err := tournament.StartTournament()
+	if err != nil {
+		t.Fatalf("Failed to start tournament: %v", err)
+	}
+
+	// Test adding a player during the tournament
+	err = tournament.AddPlayer("Eve")
+	if err != nil {
+		t.Fatalf("Failed to add player during tournament: %v", err)
+	}
+
+	// Verify the late entry note was added
+	player, exists := tournament.GetPlayerById(5) // Eve should be player 5
+	if !exists {
+		t.Fatal("Eve not found")
+	}
+
+	hasLateEntryNote := false
+	for _, note := range player.notes {
+		if strings.Contains(note, "Late entry") {
+			hasLateEntryNote = true
+			break
+		}
+	}
+	if !hasLateEntryNote {
+		t.Error("Expected late entry note for Eve")
+	}
+
+	// Test removing a player during the tournament
+	err = tournament.RemovePlayerById(2) // Remove Bob
+	if err != nil {
+		t.Fatalf("Failed to remove player during tournament: %v", err)
+	}
+
+	// Verify Bob still exists but is marked as removed
+	_, exists = tournament.GetPlayerById(2)
+	if !exists {
+		t.Error("Bob should still exist but be marked as removed")
+	}
+
+	// Test removing a player during the tournament
+	err = tournament.RemovePlayerById(3) // Remove Charlie
+	if err != nil {
+		t.Fatalf("Failed to remove player during tournament: %v", err)
+	}
+
+	// Verify Charlie is marked as removed
+	player, exists = tournament.GetPlayerById(3)
+	if !exists {
+		t.Error("Charlie should still exist but be marked as removed")
+	}
+
+	hasRemovedNote := false
+	for _, note := range player.notes {
+		if strings.Contains(note, "Removed") {
+			hasRemovedNote = true
+			break
+		}
+	}
+	if !hasRemovedNote {
+		t.Error("Expected removed note for Charlie")
+	}
+
+	// Test that dropped players are excluded from pairing
+	players := tournament.getSortedPlayers()
+	for _, id := range players {
+		if id == 3 { // Charlie's ID
+			t.Error("Dropped player should not be included in pairing")
+		}
+	}
+
+	// Test adding a player with duplicate name
+	err = tournament.AddPlayer("Alice")
+	if err == nil {
+		t.Error("Expected error when adding duplicate player name")
+	}
+
+	t.Log("Player management during tournament working correctly")
+}
+
+func TestGetPlayerByName(t *testing.T) {
+	tournament := NewTournament()
+
+	// Add some players
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+
+	// Test getting existing player
+	player, exists := tournament.GetPlayerByName("Bob")
+	if !exists {
+		t.Fatal("Expected to find Bob")
+	}
+	if player.name != "Bob" {
+		t.Errorf("Expected player name 'Bob', got '%s'", player.name)
+	}
+
+	// Test getting non-existent player
+	player, exists = tournament.GetPlayerByName("David")
+	if exists {
+		t.Error("Expected not to find David")
+	}
+	if player.name != "" {
+		t.Errorf("Expected empty name for non-existent player, got '%s'", player.name)
+	}
+
+	// Test case sensitivity
+	player, exists = tournament.GetPlayerByName("alice")
+	if exists {
+		t.Error("Expected case-sensitive matching")
+	}
+
+	t.Log("GetPlayerByName working correctly")
+}
+
+func TestRemovePlayerByeHandling(t *testing.T) {
+	tournament := NewTournament()
+
+	// Add players and start tournament (3 players ensures a bye)
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+
+	err := tournament.StartTournament()
+	if err != nil {
+		t.Fatalf("Failed to start tournament: %v", err)
+	}
+
+	// Get the current round pairings
+	pairings := tournament.GetRound()
+	if len(pairings) != 2 {
+		t.Fatalf("Expected 2 pairings, got %d", len(pairings))
+	}
+
+	// Find which player has a bye (playerb == BYE_OPPONENT_ID)
+	var byePlayerID int
+	for _, pairing := range pairings {
+		if pairing.playerb == BYE_OPPONENT_ID {
+			byePlayerID = pairing.playera
+			break
+		}
+	}
+
+	if byePlayerID == 0 {
+		t.Fatal("No bye player found in pairings")
+	}
+
+	// Test removing a player who has a bye
+	initialPairingCount := len(tournament.GetRound())
+	err = tournament.RemovePlayerById(byePlayerID)
+	if err != nil {
+		t.Fatalf("Failed to remove bye player: %v", err)
+	}
+
+	// Should have one fewer pairing (bye pairing removed)
+	newPairingCount := len(tournament.GetRound())
+	if newPairingCount != initialPairingCount-1 {
+		t.Errorf("Expected %d pairings after dropping bye player, got %d", initialPairingCount-1, newPairingCount)
+	}
+
+	// Test dropping a player who has an opponent
+	// First, add results for remaining matches and advance to next round
+	for _, pairing := range tournament.GetRound() {
+		if pairing.playerb != BYE_OPPONENT_ID {
+			err = tournament.AddResult(pairing.playera, 2, 1, 0)
+			if err != nil {
+				t.Fatalf("Failed to add result: %v", err)
+			}
+		}
+	}
+
+	err = tournament.NextRound()
+	if err != nil {
+		t.Fatalf("Failed to advance to next round: %v", err)
+	}
+
+	err = tournament.Pair(false)
+	if err != nil {
+		t.Fatalf("Failed to pair next round: %v", err)
+	}
+
+	// Find a player with an opponent (not a bye)
+	var playerWithOpponent int
+	for _, pairing := range tournament.GetRound() {
+		if pairing.playerb != BYE_OPPONENT_ID {
+			playerWithOpponent = pairing.playera
+			break
+		}
+	}
+
+	// Remove the player with opponent
+	initialPairingCount = len(tournament.GetRound())
+	err = tournament.RemovePlayerById(playerWithOpponent)
+	if err != nil {
+		t.Fatalf("Failed to remove player with opponent: %v", err)
+	}
+
+	// Should have same number of pairings (bye given to opponent)
+	newPairingCount = len(tournament.GetRound())
+	if newPairingCount != initialPairingCount {
+		t.Errorf("Expected %d pairings after dropping player with opponent, got %d", initialPairingCount, newPairingCount)
+	}
+
+	// Verify the opponent now has a bye
+	hasByeForOpponent := false
+	for _, pairing := range tournament.GetRound() {
+		if pairing.playera != playerWithOpponent && pairing.playerb == BYE_OPPONENT_ID {
+			hasByeForOpponent = true
+			break
+		}
+	}
+	if !hasByeForOpponent {
+		t.Error("Expected opponent to receive a bye when player dropped")
+	}
+
+	t.Log("RemovePlayer bye handling working correctly")
+}
+
+func TestRemovePlayerByName(t *testing.T) {
+	tournament := NewTournament()
+
+	// Add players
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+
+	// Test removing player by name
+	err := tournament.RemovePlayerByName("Bob")
+	if err != nil {
+		t.Fatalf("Failed to remove player by name: %v", err)
+	}
+
+	// Verify Bob still exists but is marked as removed
+	player, exists := tournament.GetPlayerById(2) // Bob should be player 2
+	if !exists {
+		t.Error("Bob should still exist but be marked as removed")
+	}
+
+	hasRemovedNote := false
+	for _, note := range player.notes {
+		if strings.Contains(note, "Removed") {
+			hasRemovedNote = true
+			break
+		}
+	}
+	if !hasRemovedNote {
+		t.Error("Expected removed note for Bob")
+	}
+
+	// Test removing non-existent player by name
+	err = tournament.RemovePlayerByName("David")
+	if err == nil {
+		t.Error("Expected error when removing non-existent player")
+	}
+
+	// Test case sensitivity
+	err = tournament.RemovePlayerByName("alice")
+	if err == nil {
+		t.Error("Expected case-sensitive matching")
+	}
+
+	t.Log("RemovePlayerByName working correctly")
+}

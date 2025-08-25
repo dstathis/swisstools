@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand"
 	"sort"
+	"strings"
 
 	"github.com/olekukonko/tablewriter"
 )
@@ -25,13 +26,39 @@ const (
 	POINTS_FOR_WIN  = 3 // Match points awarded for a win
 	POINTS_FOR_DRAW = 1 // Match points awarded for a draw
 	POINTS_FOR_LOSS = 0 // Match points awarded for a loss (explicit for clarity)
+
 )
 
+// TournamentConfig holds configuration options for tournaments
+type TournamentConfig struct {
+	PointsForWin  int // Points awarded for a win
+	PointsForDraw int // Points awarded for a draw
+	PointsForLoss int // Points awarded for a loss
+	ByeWins       int // Games won when receiving a bye
+	ByeLosses     int // Games lost when receiving a bye
+	ByeDraws      int // Games drawn when receiving a bye
+}
+
+// DefaultConfig returns a default tournament configuration
+func DefaultConfig() TournamentConfig {
+	return TournamentConfig{
+		PointsForWin:  POINTS_FOR_WIN,
+		PointsForDraw: POINTS_FOR_DRAW,
+		PointsForLoss: POINTS_FOR_LOSS,
+		ByeWins:       BYE_WINS,
+		ByeLosses:     BYE_LOSSES,
+		ByeDraws:      BYE_DRAWS,
+	}
+}
+
 type Tournament struct {
+	config       TournamentConfig
 	lastId       int // Most recent player id to be assigned.
 	players      map[int]Player
 	currentRound int
 	rounds       []Round
+	started      bool // Whether the tournament has started (first round paired)
+	finished     bool // Whether the tournament has finished
 }
 
 type Player struct {
@@ -54,11 +81,18 @@ type Pairing struct {
 type Round = []Pairing
 
 func NewTournament() Tournament {
+	return NewTournamentWithConfig(DefaultConfig())
+}
+
+func NewTournamentWithConfig(config TournamentConfig) Tournament {
 	tournament := Tournament{}
+	tournament.config = config
 	tournament.lastId = 0
 	tournament.players = map[int]Player{}
 	tournament.currentRound = 1          // Index round starting with 1 to make the round numbers human readable.
 	tournament.rounds = make([]Round, 2) // Initialize with capacity for rounds 0 and 1
+	tournament.started = false
+	tournament.finished = false
 	return tournament
 }
 
@@ -66,6 +100,14 @@ func (t *Tournament) AddPlayer(name string) error {
 	if name == "" {
 		return errors.New("empty name")
 	}
+
+	// Check if player with this name already exists
+	for _, player := range t.players {
+		if player.name == name {
+			return errors.New("player with this name already exists")
+		}
+	}
+
 	t.lastId++
 	player := Player{
 		name:  name,
@@ -73,6 +115,13 @@ func (t *Tournament) AddPlayer(name string) error {
 		// points, wins, losses, draws are zero-initialized by Go
 	}
 	t.players[t.lastId] = player
+
+	// If tournament has started, add a note about late entry
+	if t.started {
+		player.notes = append(player.notes, fmt.Sprintf("Late entry - joined in round %d", t.currentRound))
+		t.players[t.lastId] = player
+	}
+
 	return nil
 }
 
@@ -101,6 +150,143 @@ func (t *Tournament) NextRound() error {
 		t.rounds = append(t.rounds, Round{})
 	}
 	return nil
+}
+
+// StartTournament begins the tournament by creating the first round pairings
+func (t *Tournament) StartTournament() error {
+	if t.started {
+		return errors.New("tournament has already started")
+	}
+
+	if len(t.players) == 0 {
+		return errors.New("cannot start tournament with no players")
+	}
+
+	t.started = true
+	return t.Pair(false)
+}
+
+// GetStatus returns the current tournament status
+func (t *Tournament) GetStatus() string {
+	if t.finished {
+		return "finished"
+	}
+	if t.started {
+		return "in_progress"
+	}
+	return "setup"
+}
+
+// GetCurrentRound returns the current round number
+func (t *Tournament) GetCurrentRound() int {
+	return t.currentRound
+}
+
+// GetPlayerCount returns the number of players in the tournament
+func (t *Tournament) GetPlayerCount() int {
+	return len(t.players)
+}
+
+// GetPlayerById returns a player by ID
+func (t *Tournament) GetPlayerById(id int) (Player, bool) {
+	player, exists := t.players[id]
+	return player, exists
+}
+
+// GetPlayerID returns the ID of a player by name
+func (t *Tournament) GetPlayerID(name string) (int, bool) {
+	for id, player := range t.players {
+		if player.name == name {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+// GetPlayerByName returns a player by name
+func (t *Tournament) GetPlayerByName(name string) (Player, bool) {
+	for _, player := range t.players {
+		if player.name == name {
+			return player, true
+		}
+	}
+	return Player{}, false
+}
+
+// RemovePlayerById removes a player from the tournament while preserving their history
+func (t *Tournament) RemovePlayerById(id int) error {
+	if _, exists := t.players[id]; !exists {
+		return errors.New("player not found")
+	}
+
+	// If tournament has started, we need to handle the player's current round
+	if t.started && t.currentRound < len(t.rounds) {
+		// Find and handle any pairings involving this player in the current round
+		for i, pairing := range t.rounds[t.currentRound] {
+			if pairing.playera == id {
+				if pairing.playerb == BYE_OPPONENT_ID {
+					// Player has a bye, simply remove the pairing
+					var newPairings []Pairing
+					for j, p := range t.rounds[t.currentRound] {
+						if j != i {
+							newPairings = append(newPairings, p)
+						}
+					}
+					t.rounds[t.currentRound] = newPairings
+				} else {
+					// Give opponent a bye
+					t.rounds[t.currentRound][i] = Pairing{
+						playera:     pairing.playerb,
+						playerb:     BYE_OPPONENT_ID,
+						playeraWins: t.config.ByeWins,
+						playerbWins: t.config.ByeLosses,
+						draws:       t.config.ByeDraws,
+					}
+				}
+				break
+			} else if pairing.playerb == id {
+				if pairing.playera == BYE_OPPONENT_ID {
+					// Player has a bye, simply remove the pairing
+					var newPairings []Pairing
+					for j, p := range t.rounds[t.currentRound] {
+						if j != i {
+							newPairings = append(newPairings, p)
+						}
+					}
+					t.rounds[t.currentRound] = newPairings
+				} else {
+					// Give opponent a bye
+					t.rounds[t.currentRound][i] = Pairing{
+						playera:     pairing.playera,
+						playerb:     BYE_OPPONENT_ID,
+						playeraWins: t.config.ByeWins,
+						playerbWins: t.config.ByeLosses,
+						draws:       t.config.ByeDraws,
+					}
+				}
+				break
+			}
+		}
+	}
+
+	// Mark player as dropped instead of removing them completely
+	player := t.players[id]
+	player.notes = append(player.notes, fmt.Sprintf("Removed in round %d", t.currentRound))
+	t.players[id] = player
+
+	return nil
+}
+
+// RemovePlayerByName removes a player from the tournament by name while preserving their history
+func (t *Tournament) RemovePlayerByName(name string) error {
+	// Find the player ID by name
+	id, exists := t.GetPlayerID(name)
+	if !exists {
+		return errors.New("player not found")
+	}
+
+	// Use the existing RemovePlayerById method
+	return t.RemovePlayerById(id)
 }
 
 // removeRandomPlayer selects a random player from the slice and returns both
@@ -181,10 +367,10 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		// Byes must be handled separately because there's no opponent to update,
 		// and the bye player automatically gets a match win with predetermined game scores
 		if pairing.playerb == BYE_OPPONENT_ID {
-			// Player gets a bye - worth POINTS_FOR_WIN (match win)
+			// Player gets a bye - worth PointsForWin (match win)
 			playerA := t.players[pairing.playera]
 			playerA.wins++
-			playerA.points += POINTS_FOR_WIN
+			playerA.points += t.config.PointsForWin
 			t.players[pairing.playera] = playerA
 			continue
 		}
@@ -196,21 +382,21 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		if pairing.playeraWins > pairing.playerbWins {
 			// Player A wins the match
 			playerA.wins++
-			playerA.points += POINTS_FOR_WIN
+			playerA.points += t.config.PointsForWin
 			playerB.losses++
-			playerB.points += POINTS_FOR_LOSS // Explicit for clarity (currently 0)
+			playerB.points += t.config.PointsForLoss // Explicit for clarity (currently 0)
 		} else if pairing.playerbWins > pairing.playeraWins {
 			// Player B wins the match
 			playerB.wins++
-			playerB.points += POINTS_FOR_WIN
+			playerB.points += t.config.PointsForWin
 			playerA.losses++
-			playerA.points += POINTS_FOR_LOSS // Explicit for clarity (currently 0)
+			playerA.points += t.config.PointsForLoss // Explicit for clarity (currently 0)
 		} else {
 			// Match is drawn (equal games won, or both 0 with draws > 0)
 			playerA.draws++
-			playerA.points += POINTS_FOR_DRAW
+			playerA.points += t.config.PointsForDraw
 			playerB.draws++
-			playerB.points += POINTS_FOR_DRAW
+			playerB.points += t.config.PointsForDraw
 		}
 
 		// Update players in the map
@@ -278,9 +464,9 @@ func (t *Tournament) Pair(allowRepair bool) error {
 			pairings = append(pairings, Pairing{
 				playera:     players[i],
 				playerb:     BYE_OPPONENT_ID,
-				playeraWins: BYE_WINS,
-				playerbWins: BYE_LOSSES,
-				draws:       BYE_DRAWS,
+				playeraWins: t.config.ByeWins,
+				playerbWins: t.config.ByeLosses,
+				draws:       t.config.ByeDraws,
 			})
 			paired[players[i]] = true
 		}
@@ -293,8 +479,18 @@ func (t *Tournament) Pair(allowRepair bool) error {
 // getSortedPlayers returns player IDs sorted by points (descending), with random ordering within same point groups
 func (t *Tournament) getSortedPlayers() []int {
 	var players []int
-	for id := range t.players {
-		players = append(players, id)
+	for id, player := range t.players {
+		// Skip removed players (they have a "Removed" note)
+		isRemoved := false
+		for _, note := range player.notes {
+			if strings.Contains(note, "Removed in round") {
+				isRemoved = true
+				break
+			}
+		}
+		if !isRemoved {
+			players = append(players, id)
+		}
 	}
 
 	// Sort by points (descending) only
@@ -418,9 +614,9 @@ func (t *Tournament) randomPair() error {
 			pairings = append(pairings, Pairing{
 				playera:     players[0],
 				playerb:     BYE_OPPONENT_ID,
-				playeraWins: BYE_WINS,
-				playerbWins: BYE_LOSSES,
-				draws:       BYE_DRAWS,
+				playeraWins: t.config.ByeWins,
+				playerbWins: t.config.ByeLosses,
+				draws:       t.config.ByeDraws,
 			})
 			break
 		}
