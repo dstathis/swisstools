@@ -6,7 +6,6 @@ import (
 	"io"
 	"math/rand"
 	"sort"
-	"strings"
 
 	"github.com/olekukonko/tablewriter"
 )
@@ -62,15 +61,17 @@ type Tournament struct {
 }
 
 type Player struct {
-	name       string
-	points     int
-	wins       int
-	losses     int
-	draws      int
-	gameWins   int
-	gameLosses int
-	gameDraws  int
-	notes      []string
+	name           string
+	points         int
+	wins           int
+	losses         int
+	draws          int
+	gameWins       int
+	gameLosses     int
+	gameDraws      int
+	notes          []string
+	removed        bool // Whether the player has been removed from the tournament
+	removedInRound int  // Round when the player was removed (0 if not removed)
 }
 
 type Pairing struct {
@@ -272,9 +273,10 @@ func (t *Tournament) RemovePlayerById(id int) error {
 		}
 	}
 
-	// Mark player as dropped instead of removing them completely
+	// Mark player as removed (preserve history)
 	player := t.players[id]
-	player.notes = append(player.notes, fmt.Sprintf("Removed in round %d", t.currentRound))
+	player.removed = true
+	player.removedInRound = t.currentRound
 	t.players[id] = player
 
 	return nil
@@ -607,14 +609,7 @@ func (t *Tournament) getSortedPlayersWithTiebreakers() []int {
 	var players []int
 	for id, player := range t.players {
 		// Skip removed players
-		isRemoved := false
-		for _, note := range player.notes {
-			if strings.Contains(note, "Removed in round") {
-				isRemoved = true
-				break
-			}
-		}
-		if !isRemoved {
+		if !player.removed {
 			players = append(players, id)
 		}
 	}
@@ -660,14 +655,7 @@ func (t *Tournament) getSortedPlayers() []int {
 	var players []int
 	for id, player := range t.players {
 		// Skip removed players
-		isRemoved := false
-		for _, note := range player.notes {
-			if strings.Contains(note, "Removed in round") {
-				isRemoved = true
-				break
-			}
-		}
-		if !isRemoved {
+		if !player.removed {
 			players = append(players, id)
 		}
 	}

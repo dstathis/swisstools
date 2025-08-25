@@ -815,15 +815,8 @@ func TestTournamentStateManagement(t *testing.T) {
 		t.Error("Player should still exist after removal")
 	}
 
-	hasRemovedNote := false
-	for _, note := range player.notes {
-		if strings.Contains(note, "Removed") {
-			hasRemovedNote = true
-			break
-		}
-	}
-	if !hasRemovedNote {
-		t.Error("Expected removed note for player")
+	if !player.removed {
+		t.Error("Expected player to be marked as removed")
 	}
 
 	// Test removing player after start (should work now)
@@ -896,15 +889,8 @@ func TestPlayerManagementDuringTournament(t *testing.T) {
 		t.Error("Charlie should still exist but be marked as removed")
 	}
 
-	hasRemovedNote := false
-	for _, note := range player.notes {
-		if strings.Contains(note, "Removed") {
-			hasRemovedNote = true
-			break
-		}
-	}
-	if !hasRemovedNote {
-		t.Error("Expected removed note for Charlie")
+	if !player.removed {
+		t.Error("Expected Charlie to be marked as removed")
 	}
 
 	// Test that dropped players are excluded from pairing
@@ -1082,15 +1068,8 @@ func TestRemovePlayerByName(t *testing.T) {
 		t.Error("Bob should still exist but be marked as removed")
 	}
 
-	hasRemovedNote := false
-	for _, note := range player.notes {
-		if strings.Contains(note, "Removed") {
-			hasRemovedNote = true
-			break
-		}
-	}
-	if !hasRemovedNote {
-		t.Error("Expected removed note for Bob")
+	if !player.removed {
+		t.Error("Expected Bob to be marked as removed")
 	}
 
 	// Test removing non-existent player by name
