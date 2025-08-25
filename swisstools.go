@@ -62,12 +62,15 @@ type Tournament struct {
 }
 
 type Player struct {
-	name   string
-	points int
-	wins   int
-	losses int
-	draws  int
-	notes  []string
+	name       string
+	points     int
+	wins       int
+	losses     int
+	draws      int
+	gameWins   int
+	gameLosses int
+	gameDraws  int
+	notes      []string
 }
 
 type Pairing struct {
@@ -371,6 +374,10 @@ func (t *Tournament) UpdatePlayerStandings() error {
 			playerA := t.players[pairing.playera]
 			playerA.wins++
 			playerA.points += t.config.PointsForWin
+			// Add bye game results
+			playerA.gameWins += t.config.ByeWins
+			playerA.gameLosses += t.config.ByeLosses
+			playerA.gameDraws += t.config.ByeDraws
 			t.players[pairing.playera] = playerA
 			continue
 		}
@@ -378,6 +385,14 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		// Determine match winner based on game results
 		playerA := t.players[pairing.playera]
 		playerB := t.players[pairing.playerb]
+
+		// Add individual game results
+		playerA.gameWins += pairing.playeraWins
+		playerA.gameLosses += pairing.playerbWins
+		playerA.gameDraws += pairing.draws
+		playerB.gameWins += pairing.playerbWins
+		playerB.gameLosses += pairing.playeraWins
+		playerB.gameDraws += pairing.draws
 
 		if pairing.playeraWins > pairing.playerbWins {
 			// Player A wins the match
@@ -476,11 +491,175 @@ func (t *Tournament) Pair(allowRepair bool) error {
 	return nil
 }
 
+// TiebreakerData holds calculated tiebreaker values for a player
+type TiebreakerData struct {
+	GameWinPercentage   float64 // Games won / total games played
+	OpponentMatchWinPct float64 // Average match win percentage of opponents
+	OpponentGameWinPct  float64 // Average game win percentage of opponents
+}
+
+// PlayerStanding represents a player's position in the tournament standings
+type PlayerStanding struct {
+	Rank        int
+	PlayerID    int
+	Name        string
+	Points      int
+	Wins        int
+	Losses      int
+	Draws       int
+	Tiebreakers TiebreakerData
+}
+
+// calculateTiebreakers calculates all tiebreaker values for a player
+func (t *Tournament) calculateTiebreakers(playerID int) TiebreakerData {
+	player := t.players[playerID]
+
+	// Calculate game win percentage
+	totalGames := player.gameWins + player.gameLosses + player.gameDraws
+	gameWinPct := 0.0
+	if totalGames > 0 {
+		gameWinPct = float64(player.gameWins) / float64(totalGames)
+	}
+
+	// Calculate opponent match win percentages
+	opponentMatchWinPcts := []float64{}
+	opponentGameWinPcts := []float64{}
+
+	for round := 1; round < t.currentRound; round++ {
+		if round >= len(t.rounds) {
+			continue
+		}
+
+		for _, pairing := range t.rounds[round] {
+			var opponentID int
+			if pairing.playera == playerID {
+				opponentID = pairing.playerb
+			} else if pairing.playerb == playerID {
+				opponentID = pairing.playera
+			} else {
+				continue
+			}
+
+			// Skip byes
+			if opponentID == BYE_OPPONENT_ID {
+				continue
+			}
+
+			// Get opponent data
+			opponent, exists := t.players[opponentID]
+			if !exists {
+				continue
+			}
+
+			// Calculate opponent's match win percentage
+			totalMatches := opponent.wins + opponent.losses + opponent.draws
+			if totalMatches > 0 {
+				opponentMatchWinPct := float64(opponent.wins) / float64(totalMatches)
+				// Apply minimum 33% rule for Magic tournaments
+				if opponentMatchWinPct < 0.33 {
+					opponentMatchWinPct = 0.33
+				}
+				opponentMatchWinPcts = append(opponentMatchWinPcts, opponentMatchWinPct)
+			}
+
+			// Calculate opponent's game win percentage
+			totalOpponentGames := opponent.gameWins + opponent.gameLosses + opponent.gameDraws
+			if totalOpponentGames > 0 {
+				opponentGameWinPct := float64(opponent.gameWins) / float64(totalOpponentGames)
+				// Apply minimum 33% rule for Magic tournaments
+				if opponentGameWinPct < 0.33 {
+					opponentGameWinPct = 0.33
+				}
+				opponentGameWinPcts = append(opponentGameWinPcts, opponentGameWinPct)
+			}
+		}
+	}
+
+	// Calculate average opponent match win percentage
+	avgOpponentMatchWinPct := 0.0
+	if len(opponentMatchWinPcts) > 0 {
+		sum := 0.0
+		for _, pct := range opponentMatchWinPcts {
+			sum += pct
+		}
+		avgOpponentMatchWinPct = sum / float64(len(opponentMatchWinPcts))
+	}
+
+	// Calculate average opponent game win percentage
+	avgOpponentGameWinPct := 0.0
+	if len(opponentGameWinPcts) > 0 {
+		sum := 0.0
+		for _, pct := range opponentGameWinPcts {
+			sum += pct
+		}
+		avgOpponentGameWinPct = sum / float64(len(opponentGameWinPcts))
+	}
+
+	return TiebreakerData{
+		GameWinPercentage:   gameWinPct,
+		OpponentMatchWinPct: avgOpponentMatchWinPct,
+		OpponentGameWinPct:  avgOpponentGameWinPct,
+	}
+}
+
+// getSortedPlayersWithTiebreakers returns player IDs sorted by points and tiebreakers
+func (t *Tournament) getSortedPlayersWithTiebreakers() []int {
+	var players []int
+	for id, player := range t.players {
+		// Skip removed players
+		isRemoved := false
+		for _, note := range player.notes {
+			if strings.Contains(note, "Removed in round") {
+				isRemoved = true
+				break
+			}
+		}
+		if !isRemoved {
+			players = append(players, id)
+		}
+	}
+
+	// Sort by points (descending), then by tiebreakers
+	sort.Slice(players, func(i, j int) bool {
+		playerI := t.players[players[i]]
+		playerJ := t.players[players[j]]
+
+		// First by points
+		if playerI.points != playerJ.points {
+			return playerI.points > playerJ.points
+		}
+
+		// Then by tiebreakers
+		tiebreakersI := t.calculateTiebreakers(players[i])
+		tiebreakersJ := t.calculateTiebreakers(players[j])
+
+		// 1. Opponent match win percentage (first tiebreaker)
+		if tiebreakersI.OpponentMatchWinPct != tiebreakersJ.OpponentMatchWinPct {
+			return tiebreakersI.OpponentMatchWinPct > tiebreakersJ.OpponentMatchWinPct
+		}
+
+		// 2. Game win percentage (second tiebreaker)
+		if tiebreakersI.GameWinPercentage != tiebreakersJ.GameWinPercentage {
+			return tiebreakersI.GameWinPercentage > tiebreakersJ.GameWinPercentage
+		}
+
+		// 3. Opponent game win percentage (third tiebreaker)
+		if tiebreakersI.OpponentGameWinPct != tiebreakersJ.OpponentGameWinPct {
+			return tiebreakersI.OpponentGameWinPct > tiebreakersJ.OpponentGameWinPct
+		}
+
+		// If still tied, maintain original order (effectively random within same tiebreaker group)
+		return i < j
+	})
+
+	return players
+}
+
 // getSortedPlayers returns player IDs sorted by points (descending), with random ordering within same point groups
 func (t *Tournament) getSortedPlayers() []int {
 	var players []int
 	for id, player := range t.players {
-		// Skip removed players (they have a "Removed" note)
+		// Skip removed players
 		isRemoved := false
 		for _, note := range player.notes {
 			if strings.Contains(note, "Removed in round") {
@@ -638,4 +817,53 @@ func (t *Tournament) randomPair() error {
 
 	t.rounds[t.currentRound] = pairings
 	return nil
+}
+
+// GetStandings returns the current tournament standings with tiebreakers
+func (t *Tournament) GetStandings() []PlayerStanding {
+	// Get players sorted by points and tiebreakers
+	sortedPlayers := t.getSortedPlayersWithTiebreakers()
+
+	var standings []PlayerStanding
+	nextRank := 1
+
+	for i, playerID := range sortedPlayers {
+		player := t.players[playerID]
+		tiebreakers := t.calculateTiebreakers(playerID)
+
+		// Handle ties (same rank for players with identical points and tiebreakers)
+		if i > 0 {
+			prevPlayerID := sortedPlayers[i-1]
+			prevPlayer := t.players[prevPlayerID]
+			prevTiebreakers := t.calculateTiebreakers(prevPlayerID)
+
+			if player.points == prevPlayer.points &&
+				tiebreakers.OpponentMatchWinPct == prevTiebreakers.OpponentMatchWinPct &&
+				tiebreakers.GameWinPercentage == prevTiebreakers.GameWinPercentage &&
+				tiebreakers.OpponentGameWinPct == prevTiebreakers.OpponentGameWinPct {
+				// Same rank as previous player (tied)
+				nextRank = standings[len(standings)-1].Rank
+			} else {
+				// Count unique ranks used so far and add 1
+				uniqueRanks := make(map[int]bool)
+				for _, standing := range standings {
+					uniqueRanks[standing.Rank] = true
+				}
+				nextRank = len(uniqueRanks) + 1
+			}
+		}
+
+		standings = append(standings, PlayerStanding{
+			Rank:        nextRank,
+			PlayerID:    playerID,
+			Name:        player.name,
+			Points:      player.points,
+			Wins:        player.wins,
+			Losses:      player.losses,
+			Draws:       player.draws,
+			Tiebreakers: tiebreakers,
+		})
+	}
+
+	return standings
 }

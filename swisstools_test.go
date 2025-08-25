@@ -1107,3 +1107,381 @@ func TestRemovePlayerByName(t *testing.T) {
 
 	t.Log("RemovePlayerByName working correctly")
 }
+
+func TestTiebreakerSystem(t *testing.T) {
+	tournament := NewTournament()
+
+	// Add players
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+	tournament.AddPlayer("Diana")
+
+	// Start tournament
+	err := tournament.StartTournament()
+	if err != nil {
+		t.Fatalf("Failed to start tournament: %v", err)
+	}
+
+	// Add results for round 1 to create different scenarios
+	pairings := tournament.GetRound()
+	for _, pairing := range pairings {
+		if pairing.playerb != BYE_OPPONENT_ID {
+			// Alice wins 2-1, Bob wins 2-0, Charlie wins 2-1, Diana gets bye
+			if pairing.playera == 1 { // Alice
+				tournament.AddResult(pairing.playera, 2, 1, 0)
+			} else if pairing.playera == 2 { // Bob
+				tournament.AddResult(pairing.playera, 2, 0, 0)
+			} else if pairing.playera == 3 { // Charlie
+				tournament.AddResult(pairing.playera, 2, 1, 0)
+			} else if pairing.playera == 4 { // Diana
+				tournament.AddResult(pairing.playera, 1, 2, 0)
+			}
+		}
+		// Bye matches already have results
+	}
+
+	// Update standings
+	err = tournament.UpdatePlayerStandings()
+	if err != nil {
+		t.Fatalf("Failed to update standings: %v", err)
+	}
+
+	// Get standings with tiebreakers
+	standings := tournament.GetStandings()
+
+	// Verify we have standings
+	if len(standings) != 4 {
+		t.Fatalf("Expected 4 standings, got %d", len(standings))
+	}
+
+	// Verify tiebreaker data is calculated
+	for _, standing := range standings {
+		if standing.Tiebreakers.GameWinPercentage < 0 || standing.Tiebreakers.GameWinPercentage > 1 {
+			t.Errorf("Invalid game win percentage for %s: %f", standing.Name, standing.Tiebreakers.GameWinPercentage)
+		}
+		if standing.Tiebreakers.OpponentMatchWinPct < 0 || standing.Tiebreakers.OpponentMatchWinPct > 1 {
+			t.Errorf("Invalid opponent match win percentage for %s: %f", standing.Name, standing.Tiebreakers.OpponentMatchWinPct)
+		}
+	}
+
+	// Print standings for debugging
+	t.Logf("Standings:")
+	for _, standing := range standings {
+		t.Logf("%d. %s - Points: %d, Games: %d-%d-%d, Game Win %%: %.3f",
+			standing.Rank, standing.Name, standing.Points,
+			standing.Wins, standing.Losses, standing.Draws,
+			standing.Tiebreakers.GameWinPercentage)
+	}
+
+	// Verify that standings are sorted by points first, then tiebreakers
+	for i := 1; i < len(standings); i++ {
+		if standings[i].Points > standings[i-1].Points {
+			t.Errorf("Standings not sorted by points: %s (%d) before %s (%d)",
+				standings[i-1].Name, standings[i-1].Points,
+				standings[i].Name, standings[i].Points)
+		}
+	}
+
+	// Verify that all players have valid tiebreaker data
+	for _, standing := range standings {
+		if standing.Tiebreakers.GameWinPercentage < 0 || standing.Tiebreakers.GameWinPercentage > 1 {
+			t.Errorf("Invalid game win percentage for %s: %f", standing.Name, standing.Tiebreakers.GameWinPercentage)
+		}
+	}
+
+	t.Log("Tiebreaker system working correctly")
+}
+
+func TestGameTrackingInTiebreakers(t *testing.T) {
+	tournament := NewTournament()
+
+	// Add players
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+	tournament.AddPlayer("Diana")
+
+	// Start tournament (this automatically pairs the first round)
+	err := tournament.StartTournament()
+	if err != nil {
+		t.Fatalf("Failed to start tournament: %v", err)
+	}
+
+	// Add results with different game scores
+	pairings := tournament.GetRound()
+
+	// Add results for all pairings
+	for _, pairing := range pairings {
+		if pairing.playerb == BYE_OPPONENT_ID {
+			// Skip bye pairings
+			continue
+		}
+
+		// Add results based on player ID
+		if pairing.playera == 1 { // Alice
+			tournament.AddResult(pairing.playera, 2, 1, 0) // Alice wins 2-1
+		} else if pairing.playera == 2 { // Bob
+			tournament.AddResult(pairing.playera, 1, 2, 0) // Bob loses 1-2
+		} else if pairing.playera == 3 { // Charlie
+			tournament.AddResult(pairing.playera, 2, 0, 0) // Charlie wins 2-0
+		} else if pairing.playera == 4 { // Diana
+			tournament.AddResult(pairing.playera, 0, 2, 0) // Diana loses 0-2
+		}
+	}
+
+	// Update standings
+	err = tournament.UpdatePlayerStandings()
+	if err != nil {
+		t.Fatalf("Failed to update standings: %v", err)
+	}
+
+	// Get standings
+	standings := tournament.GetStandings()
+
+	// Find players in standings
+	var aliceStanding, bobStanding PlayerStanding
+	for _, standing := range standings {
+		if standing.Name == "Alice" {
+			aliceStanding = standing
+		}
+		if standing.Name == "Bob" {
+			bobStanding = standing
+		}
+	}
+
+	// Check that both players have valid game win percentages
+	if aliceStanding.Tiebreakers.GameWinPercentage < 0 || aliceStanding.Tiebreakers.GameWinPercentage > 1 {
+		t.Errorf("Invalid game win percentage for Alice: %.3f", aliceStanding.Tiebreakers.GameWinPercentage)
+	}
+
+	if bobStanding.Tiebreakers.GameWinPercentage < 0 || bobStanding.Tiebreakers.GameWinPercentage > 1 {
+		t.Errorf("Invalid game win percentage for Bob: %.3f", bobStanding.Tiebreakers.GameWinPercentage)
+	}
+
+	// Verify that game tracking is working by checking that the percentages are different
+	// (since they had different game results)
+	if aliceStanding.Tiebreakers.GameWinPercentage == bobStanding.Tiebreakers.GameWinPercentage {
+		t.Errorf("Expected different game win percentages, but both players have %.3f",
+			aliceStanding.Tiebreakers.GameWinPercentage)
+	}
+
+	t.Logf("Game tracking test passed: Alice (%.3f game win %%) vs Bob (%.3f game win %%)",
+		aliceStanding.Tiebreakers.GameWinPercentage, bobStanding.Tiebreakers.GameWinPercentage)
+}
+
+func TestMinimum33PercentRule(t *testing.T) {
+	tournament := NewTournament()
+
+	// Add players
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+	tournament.AddPlayer("Diana")
+
+	// Start tournament
+	err := tournament.StartTournament()
+	if err != nil {
+		t.Fatalf("Failed to start tournament: %v", err)
+	}
+
+	// Round 1: Create initial records
+	pairings := tournament.GetRound()
+	for _, pairing := range pairings {
+		if pairing.playerb == BYE_OPPONENT_ID {
+			continue
+		}
+
+		// Alice beats Bob, Charlie beats Diana
+		if pairing.playera == 1 { // Alice
+			tournament.AddResult(pairing.playera, 2, 0, 0) // Alice wins 2-0
+		} else if pairing.playera == 2 { // Bob
+			tournament.AddResult(pairing.playera, 0, 2, 0) // Bob loses 0-2
+		} else if pairing.playera == 3 { // Charlie
+			tournament.AddResult(pairing.playera, 2, 0, 0) // Charlie wins 2-0
+		} else if pairing.playera == 4 { // Diana
+			tournament.AddResult(pairing.playera, 0, 2, 0) // Diana loses 0-2
+		}
+	}
+
+	// Update standings for round 1
+	err = tournament.UpdatePlayerStandings()
+	if err != nil {
+		t.Fatalf("Failed to update standings: %v", err)
+	}
+
+	// Advance to round 2
+	err = tournament.NextRound()
+	if err != nil {
+		t.Fatalf("Failed to advance to round 2: %v", err)
+	}
+
+	// Pair round 2
+	err = tournament.Pair(false)
+	if err != nil {
+		t.Fatalf("Failed to pair round 2: %v", err)
+	}
+
+	// Round 2: Alice vs Charlie, Bob vs Diana
+	pairings = tournament.GetRound()
+	for _, pairing := range pairings {
+		if pairing.playerb == BYE_OPPONENT_ID {
+			continue
+		}
+
+		// Alice beats Charlie, Bob beats Diana
+		if pairing.playera == 1 { // Alice
+			tournament.AddResult(pairing.playera, 2, 1, 0) // Alice wins 2-1
+		} else if pairing.playera == 2 { // Bob
+			tournament.AddResult(pairing.playera, 2, 0, 0) // Bob wins 2-0
+		} else if pairing.playera == 3 { // Charlie
+			tournament.AddResult(pairing.playera, 1, 2, 0) // Charlie loses 1-2
+		} else if pairing.playera == 4 { // Diana
+			tournament.AddResult(pairing.playera, 0, 2, 0) // Diana loses 0-2
+		}
+	}
+
+	// Update standings for round 2
+	err = tournament.UpdatePlayerStandings()
+	if err != nil {
+		t.Fatalf("Failed to update standings: %v", err)
+	}
+
+	// Get standings
+	standings := tournament.GetStandings()
+
+	// Find Alice in standings
+	var aliceStanding PlayerStanding
+	for _, standing := range standings {
+		if standing.Name == "Alice" {
+			aliceStanding = standing
+			break
+		}
+	}
+
+	// Alice should have points from her wins (exact number depends on pairing)
+	if aliceStanding.Points < 3 {
+		t.Errorf("Expected Alice to have at least 3 points, got %d", aliceStanding.Points)
+	}
+
+	// Alice's opponent match win percentage should be at least 33%
+	// Her opponents (Bob and Charlie) have poor records, but should be boosted to 33%
+	if aliceStanding.Tiebreakers.OpponentMatchWinPct < 0.33 {
+		t.Errorf("Expected Alice's opponent match win percentage to be at least 33%%, got %.3f",
+			aliceStanding.Tiebreakers.OpponentMatchWinPct)
+	}
+
+	// Alice's opponent game win percentage should be at least 33%
+	if aliceStanding.Tiebreakers.OpponentGameWinPct < 0.33 {
+		t.Errorf("Expected Alice's opponent game win percentage to be at least 33%%, got %.3f",
+			aliceStanding.Tiebreakers.OpponentGameWinPct)
+	}
+
+	t.Logf("Minimum 33%% rule test passed: Alice's opponent match win %%: %.3f, opponent game win %%: %.3f",
+		aliceStanding.Tiebreakers.OpponentMatchWinPct, aliceStanding.Tiebreakers.OpponentGameWinPct)
+}
+
+func TestTournamentRankingSystem(t *testing.T) {
+	tournament := NewTournament()
+
+	// Add players
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+	tournament.AddPlayer("Diana")
+
+	// Start tournament
+	err := tournament.StartTournament()
+	if err != nil {
+		t.Fatalf("Failed to start tournament: %v", err)
+	}
+
+	// Round 1: Create a scenario where Alice and Bob will be tied
+	pairings := tournament.GetRound()
+	for _, pairing := range pairings {
+		if pairing.playerb == BYE_OPPONENT_ID {
+			continue
+		}
+
+		// Add results for all pairings
+		if pairing.playera == 1 { // Alice
+			tournament.AddResult(pairing.playera, 2, 0, 0)
+		} else if pairing.playera == 2 { // Bob
+			tournament.AddResult(pairing.playera, 2, 0, 0) // Bob wins 2-0
+		} else if pairing.playera == 3 { // Charlie
+			tournament.AddResult(pairing.playera, 0, 2, 0) // Charlie loses 0-2
+		} else if pairing.playera == 4 { // Diana
+			tournament.AddResult(pairing.playera, 0, 2, 0) // Diana loses 0-2
+		}
+	}
+
+	// Update standings for round 1
+	err = tournament.UpdatePlayerStandings()
+	if err != nil {
+		t.Fatalf("Failed to update standings: %v", err)
+	}
+
+	// Get standings
+	standings := tournament.GetStandings()
+
+	// Print standings for debugging
+	t.Logf("Standings:")
+	for _, standing := range standings {
+		t.Logf("%d. %s - Points: %d", standing.Rank, standing.Name, standing.Points)
+	}
+
+	// Find players in standings
+	var aliceStanding, bobStanding, charlieStanding, dianaStanding PlayerStanding
+	for _, standing := range standings {
+		switch standing.Name {
+		case "Alice":
+			aliceStanding = standing
+		case "Bob":
+			bobStanding = standing
+		case "Charlie":
+			charlieStanding = standing
+		case "Diana":
+			dianaStanding = standing
+		}
+	}
+
+	// Check that we have valid standings
+	if len(standings) != 4 {
+		t.Fatalf("Expected 4 standings, got %d", len(standings))
+	}
+
+	// Verify that the ranking system works correctly
+	// Players with the same points should have the same rank
+	// Players with different points should have sequential ranks
+
+	// Find the highest rank
+	maxRank := 0
+	for _, standing := range standings {
+		if standing.Rank > maxRank {
+			maxRank = standing.Rank
+		}
+	}
+
+	// Verify that ranks are sequential (no gaps)
+	expectedRanks := make(map[int]bool)
+	for i := 1; i <= maxRank; i++ {
+		expectedRanks[i] = false
+	}
+
+	for _, standing := range standings {
+		if standing.Rank < 1 || standing.Rank > maxRank {
+			t.Errorf("Invalid rank %d for %s", standing.Rank, standing.Name)
+		}
+		expectedRanks[standing.Rank] = true
+	}
+
+	// Check that all expected ranks are used
+	for rank, used := range expectedRanks {
+		if !used {
+			t.Errorf("Rank %d is not used by any player", rank)
+		}
+	}
+
+	t.Logf("Tournament ranking test passed: Alice (rank %d), Bob (rank %d), Charlie (rank %d), Diana (rank %d)",
+		aliceStanding.Rank, bobStanding.Rank, charlieStanding.Rank, dianaStanding.Rank)
+}
