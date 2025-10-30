@@ -858,8 +858,10 @@ func (t *Tournament) randomPair() error {
 	}
 
 	players := []int{}
-	for id := range t.players {
-		players = append(players, id)
+	for id, p := range t.players {
+		if !p.removed {
+			players = append(players, id)
+		}
 	}
 
 	var pairings []Pairing

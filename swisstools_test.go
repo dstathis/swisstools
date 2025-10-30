@@ -1464,3 +1464,161 @@ func TestTournamentRankingSystem(t *testing.T) {
 	t.Logf("Tournament ranking test passed: Alice (rank %d), Bob (rank %d), Charlie (rank %d), Diana (rank %d)",
 		aliceStanding.Rank, bobStanding.Rank, charlieStanding.Rank, dianaStanding.Rank)
 }
+
+// Dump/Load tests to ensure tournament can be resumed correctly
+func TestDumpLoadBeforeStart(t *testing.T) {
+	// Setup tournament with players and optional metadata
+	tournament := NewTournament()
+	if err := tournament.AddPlayer("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tournament.AddPlayer("Bob"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Optional metadata
+	if err := tournament.SetPlayerExternalID(1, 12345); err != nil {
+		t.Fatal(err)
+	}
+	deck := Decklist{Main: map[string]int{"Card A": 4, "Card B": 2}, Sideboard: map[string]int{"Card C": 3}}
+	if err := tournament.SetPlayerDecklist(1, deck); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dump and load
+	data, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpJSON failed: %v", err)
+	}
+
+	restored, err := LoadTournament(data)
+	if err != nil {
+		t.Fatalf("LoadJSON failed: %v", err)
+	}
+
+	// Verify status and metadata
+	if restored.GetStatus() != "setup" {
+		t.Fatalf("Expected status 'setup', got '%s'", restored.GetStatus())
+	}
+
+	p1, ok := restored.GetPlayerById(1)
+	if !ok || p1.name != "Alice" {
+		t.Fatalf("Expected Alice with ID 1, got ok=%v name=%s", ok, p1.name)
+	}
+
+	// Verify optional fields
+	ext, has := restored.GetPlayerExternalID(1)
+	if !has || ext == nil || *ext != 12345 {
+		t.Fatalf("Expected externalID=12345, got has=%v val=%v", has, ext)
+	}
+	dl, hasDL := restored.GetPlayerDecklist(1)
+	if !hasDL || dl == nil || dl.Main["Card A"] != 4 || dl.Sideboard["Card C"] != 3 {
+		t.Fatalf("Decklist not restored correctly: %+v", dl)
+	}
+
+	// Ensure we can start and pair
+	if err := restored.StartTournament(); err != nil {
+		t.Fatalf("StartTournament after restore failed: %v", err)
+	}
+	if len(restored.GetRound()) == 0 {
+		t.Fatal("Expected pairings after starting tournament")
+	}
+}
+
+func TestDumpLoadMidRoundResume(t *testing.T) {
+	tournament := NewTournament()
+	// 4 players to avoid byes
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+	tournament.AddPlayer("Diana")
+
+	if err := tournament.StartTournament(); err != nil {
+		t.Fatalf("Failed to start: %v", err)
+	}
+
+	// Pairings exist; record results for exactly one non-bye pairing (both should be non-bye with 4 players)
+	pairings := tournament.GetRound()
+	if len(pairings) == 0 {
+		t.Fatal("No pairings in round 1")
+	}
+	// Complete first pairing only
+	pr := pairings[0]
+	if pr.playerb == BYE_OPPONENT_ID {
+		t.Skip("Unexpected bye with 4 players; skipping")
+	}
+	if err := tournament.AddResult(pr.playera, 2, 1, 0); err != nil {
+		t.Fatalf("AddResult failed: %v", err)
+	}
+
+	// Dump current state mid-round
+	data, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpJSON failed: %v", err)
+	}
+
+	restored, err := LoadTournament(data)
+	if err != nil {
+		t.Fatalf("LoadJSON failed: %v", err)
+	}
+
+	// Resume: complete remaining pairings and update standings
+	for _, p := range restored.GetRound() {
+		if p.playera == pr.playera && p.playerb == pr.playerb {
+			// already set above; skip
+			continue
+		}
+		if p.playerb != BYE_OPPONENT_ID {
+			if err := restored.AddResult(p.playera, 2, 0, 0); err != nil {
+				t.Fatalf("AddResult after restore failed: %v", err)
+			}
+		}
+	}
+
+	// Should be able to update standings and advance
+	if err := restored.UpdatePlayerStandings(); err != nil {
+		t.Fatalf("UpdatePlayerStandings after restore failed: %v", err)
+	}
+	if err := restored.NextRound(); err != nil {
+		t.Fatalf("NextRound after restore failed: %v", err)
+	}
+}
+
+func TestDumpLoadWithRemovedPlayer(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")   // 1
+	tournament.AddPlayer("Bob")     // 2
+	tournament.AddPlayer("Charlie") // 3
+
+	// Remove Bob before starting
+	if err := tournament.RemovePlayerById(2); err != nil {
+		t.Fatalf("RemovePlayerById failed: %v", err)
+	}
+
+	data, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpJSON failed: %v", err)
+	}
+	restored, err := LoadTournament(data)
+	if err != nil {
+		t.Fatalf("LoadJSON failed: %v", err)
+	}
+
+	p2, ok := restored.GetPlayerById(2)
+	if !ok {
+		t.Fatal("Expected player 2 to exist after restore")
+	}
+	if !p2.removed {
+		t.Fatal("Expected player 2 to remain marked as removed after restore")
+	}
+
+	// Ensure pairing excludes removed players
+	if err := restored.Pair(false); err != nil {
+		t.Fatalf("Pair after restore failed: %v", err)
+	}
+	for _, p := range restored.GetRound() {
+		if p.playera == 2 || p.playerb == 2 {
+			t.Fatal("Removed player should not be paired after restore")
+		}
+	}
+}
