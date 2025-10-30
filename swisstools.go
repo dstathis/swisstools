@@ -60,6 +60,13 @@ type Tournament struct {
 	finished     bool // Whether the tournament has finished
 }
 
+// Decklist represents a player's deck configuration.
+// Using maps allows counting unique items and future validation of quantities.
+type Decklist struct {
+	Main      map[string]int
+	Sideboard map[string]int
+}
+
 type Player struct {
 	name           string
 	points         int
@@ -72,6 +79,10 @@ type Player struct {
 	notes          []string
 	removed        bool // Whether the player has been removed from the tournament
 	removedInRound int  // Round when the player was removed (0 if not removed)
+
+	// Optional metadata
+	externalID *int      // Optional global player identifier
+	decklist   *Decklist // Optional decklist; validation not implemented yet
 }
 
 type Pairing struct {
@@ -215,6 +226,83 @@ func (t *Tournament) GetPlayerByName(name string) (Player, bool) {
 		}
 	}
 	return Player{}, false
+}
+
+// SetPlayerExternalID sets an optional global identifier for a player.
+func (t *Tournament) SetPlayerExternalID(id int, externalID int) error {
+	player, exists := t.players[id]
+	if !exists {
+		return errors.New("player not found")
+	}
+	player.externalID = &externalID
+	t.players[id] = player
+	return nil
+}
+
+// ClearPlayerExternalID removes the optional global identifier for a player.
+func (t *Tournament) ClearPlayerExternalID(id int) error {
+	player, exists := t.players[id]
+	if !exists {
+		return errors.New("player not found")
+	}
+	player.externalID = nil
+	t.players[id] = player
+	return nil
+}
+
+// GetPlayerExternalID returns the optional global identifier for a player.
+// The boolean indicates if an identifier is set.
+func (t *Tournament) GetPlayerExternalID(id int) (*int, bool) {
+	player, exists := t.players[id]
+	if !exists {
+		return nil, false
+	}
+	if player.externalID == nil {
+		return nil, false
+	}
+	return player.externalID, true
+}
+
+// SetPlayerDecklist sets the player's decklist.
+func (t *Tournament) SetPlayerDecklist(id int, deck Decklist) error {
+	player, exists := t.players[id]
+	if !exists {
+		return errors.New("player not found")
+	}
+	// Ensure maps are non-nil to avoid nil-map writes later
+	if deck.Main == nil {
+		deck.Main = map[string]int{}
+	}
+	if deck.Sideboard == nil {
+		deck.Sideboard = map[string]int{}
+	}
+	dl := deck
+	player.decklist = &dl
+	t.players[id] = player
+	return nil
+}
+
+// ClearPlayerDecklist removes the player's decklist.
+func (t *Tournament) ClearPlayerDecklist(id int) error {
+	player, exists := t.players[id]
+	if !exists {
+		return errors.New("player not found")
+	}
+	player.decklist = nil
+	t.players[id] = player
+	return nil
+}
+
+// GetPlayerDecklist returns the player's decklist if present.
+func (t *Tournament) GetPlayerDecklist(id int) (*Decklist, bool) {
+	player, exists := t.players[id]
+	if !exists {
+		return nil, false
+	}
+	if player.decklist == nil {
+		return nil, false
+	}
+	return player.decklist, true
 }
 
 // RemovePlayerById removes a player from the tournament while preserving their history
