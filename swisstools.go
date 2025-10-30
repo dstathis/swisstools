@@ -95,6 +95,12 @@ type Pairing struct {
 
 type Round = []Pairing
 
+// PlayerA returns the player ID for the first player in the pairing.
+func (p Pairing) PlayerA() int { return p.playera }
+
+// PlayerB returns the player ID for the second player in the pairing (or BYE_OPPONENT_ID for a bye).
+func (p Pairing) PlayerB() int { return p.playerb }
+
 func NewTournament() Tournament {
 	return NewTournamentWithConfig(DefaultConfig())
 }
