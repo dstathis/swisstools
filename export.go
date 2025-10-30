@@ -48,7 +48,10 @@ type pairingExport struct {
 }
 
 // DumpTournament returns the tournament state serialized as JSON.
-// This snapshot can be persisted and later used for restoring state.
+//
+// Returns:
+//   - []byte: JSON-encoded snapshot of the tournament
+//   - error: non-nil if serialization fails
 func (t *Tournament) DumpTournament() ([]byte, error) {
 	// Serialize players in a stable order by ID
 	playerIDs := make([]int, 0, len(t.players))
@@ -110,6 +113,13 @@ func (t *Tournament) DumpTournament() ([]byte, error) {
 }
 
 // LoadTournament reconstructs a Tournament from a previously produced DumpTournament payload.
+//
+// Inputs:
+//   - data: JSON-encoded tournament snapshot from DumpTournament
+//
+// Returns:
+//   - Tournament: reconstructed tournament
+//   - error: non-nil if the payload cannot be decoded
 func LoadTournament(data []byte) (Tournament, error) {
 	var payload tournamentExport
 	if err := json.Unmarshal(data, &payload); err != nil {

@@ -28,7 +28,13 @@ const (
 
 )
 
-// TournamentConfig holds configuration options for tournaments
+// TournamentConfig holds configuration options for tournaments.
+//
+// Fields:
+//   - PointsForWin: match points awarded to the winner of a match
+//   - PointsForDraw: match points awarded to each player in a drawn match
+//   - PointsForLoss: match points awarded to the loser of a match
+//   - ByeWins/ByeLosses/ByeDraws: game-level results applied for a bye
 type TournamentConfig struct {
 	PointsForWin  int // Points awarded for a win
 	PointsForDraw int // Points awarded for a draw
@@ -38,7 +44,10 @@ type TournamentConfig struct {
 	ByeDraws      int // Games drawn when receiving a bye
 }
 
-// DefaultConfig returns a default tournament configuration
+// DefaultConfig returns a default tournament configuration.
+//
+// Returns:
+//   - TournamentConfig: default values for points and bye game results
 func DefaultConfig() TournamentConfig {
 	return TournamentConfig{
 		PointsForWin:  POINTS_FOR_WIN,
@@ -50,6 +59,8 @@ func DefaultConfig() TournamentConfig {
 	}
 }
 
+// Tournament manages the state of a Swiss-system tournament, including
+// players, rounds, pairings, results, standings, and configuration.
 type Tournament struct {
 	config       TournamentConfig
 	lastId       int // Most recent player id to be assigned.
@@ -62,6 +73,10 @@ type Tournament struct {
 
 // Decklist represents a player's deck configuration.
 // Using maps allows counting unique items and future validation of quantities.
+//
+// Fields:
+//   - Main: card name -> quantity mapping for the main deck
+//   - Sideboard: card name -> quantity mapping for the sideboard
 type Decklist struct {
 	Main      map[string]int
 	Sideboard map[string]int
@@ -101,10 +116,12 @@ func (p Pairing) PlayerA() int { return p.playera }
 // PlayerB returns the player ID for the second player in the pairing (or BYE_OPPONENT_ID for a bye).
 func (p Pairing) PlayerB() int { return p.playerb }
 
+// NewTournament creates a Tournament with the default configuration.
 func NewTournament() Tournament {
 	return NewTournamentWithConfig(DefaultConfig())
 }
 
+// NewTournamentWithConfig creates a Tournament using the provided configuration.
 func NewTournamentWithConfig(config TournamentConfig) Tournament {
 	tournament := Tournament{}
 	tournament.config = config
@@ -117,6 +134,7 @@ func NewTournamentWithConfig(config TournamentConfig) Tournament {
 	return tournament
 }
 
+// AddPlayer adds a player by name. Names must be non-empty and unique.
 func (t *Tournament) AddPlayer(name string) error {
 	if name == "" {
 		return errors.New("empty name")
@@ -146,6 +164,7 @@ func (t *Tournament) AddPlayer(name string) error {
 	return nil
 }
 
+// FormatPlayers writes a simple table of players and basic stats to the writer.
 func (t *Tournament) FormatPlayers(w io.Writer) {
 	table := tablewriter.NewWriter(w)
 	table.SetHeader([]string{"Name", "Wins", "Losses", "Points"})
@@ -160,6 +179,8 @@ func (t *Tournament) FormatPlayers(w io.Writer) {
 	table.Render()
 }
 
+// NextRound validates and applies results for the current round and advances
+// the tournament to the next round index.
 func (t *Tournament) NextRound() error {
 	err := t.UpdatePlayerStandings()
 	if err != nil {
@@ -173,7 +194,10 @@ func (t *Tournament) NextRound() error {
 	return nil
 }
 
-// StartTournament begins the tournament by creating the first round pairings
+// StartTournament begins the tournament by creating the first round pairings.
+//
+// Returns:
+//   - error: non-nil if the tournament has already started or there are no players
 func (t *Tournament) StartTournament() error {
 	if t.started {
 		return errors.New("tournament has already started")
@@ -187,7 +211,10 @@ func (t *Tournament) StartTournament() error {
 	return t.Pair(false)
 }
 
-// GetStatus returns the current tournament status
+// GetStatus returns the current tournament status.
+//
+// Returns:
+//   - string: one of "setup", "in_progress", or "finished"
 func (t *Tournament) GetStatus() string {
 	if t.finished {
 		return "finished"
@@ -198,23 +225,45 @@ func (t *Tournament) GetStatus() string {
 	return "setup"
 }
 
-// GetCurrentRound returns the current round number
+// GetCurrentRound returns the current round number.
+//
+// Returns:
+//   - int: 1-based round index
 func (t *Tournament) GetCurrentRound() int {
 	return t.currentRound
 }
 
-// GetPlayerCount returns the number of players in the tournament
+// GetPlayerCount returns the number of players in the tournament.
+// Includes removed players (history is preserved).
+//
+// Returns:
+//   - int: number of players stored
 func (t *Tournament) GetPlayerCount() int {
 	return len(t.players)
 }
 
-// GetPlayerById returns a player by ID
+// GetPlayerById returns a player by ID.
+//
+// Inputs:
+//   - id: player identifier
+//
+// Returns:
+//   - Player: player struct (unexported fields)
+//   - bool: true if found, false otherwise
 func (t *Tournament) GetPlayerById(id int) (Player, bool) {
 	player, exists := t.players[id]
 	return player, exists
 }
 
-// GetPlayerID returns the ID of a player by name
+// GetPlayerID returns the ID of a player by name.
+// Name matching is case-sensitive.
+//
+// Inputs:
+//   - name: player name
+//
+// Returns:
+//   - int: player ID if found, 0 otherwise
+//   - bool: true if found, false otherwise
 func (t *Tournament) GetPlayerID(name string) (int, bool) {
 	for id, player := range t.players {
 		if player.name == name {
@@ -224,7 +273,15 @@ func (t *Tournament) GetPlayerID(name string) (int, bool) {
 	return 0, false
 }
 
-// GetPlayerByName returns a player by name
+// GetPlayerByName returns a player by name.
+// Name matching is case-sensitive.
+//
+// Inputs:
+//   - name: player name
+//
+// Returns:
+//   - Player: player struct (unexported fields)
+//   - bool: true if found, false otherwise
 func (t *Tournament) GetPlayerByName(name string) (Player, bool) {
 	for _, player := range t.players {
 		if player.name == name {
@@ -235,6 +292,13 @@ func (t *Tournament) GetPlayerByName(name string) (Player, bool) {
 }
 
 // SetPlayerExternalID sets an optional global identifier for a player.
+//
+// Inputs:
+//   - id: player ID
+//   - externalID: global identifier to associate
+//
+// Returns:
+//   - error: non-nil if the player does not exist
 func (t *Tournament) SetPlayerExternalID(id int, externalID int) error {
 	player, exists := t.players[id]
 	if !exists {
@@ -246,6 +310,12 @@ func (t *Tournament) SetPlayerExternalID(id int, externalID int) error {
 }
 
 // ClearPlayerExternalID removes the optional global identifier for a player.
+//
+// Inputs:
+//   - id: player ID
+//
+// Returns:
+//   - error: non-nil if the player does not exist
 func (t *Tournament) ClearPlayerExternalID(id int) error {
 	player, exists := t.players[id]
 	if !exists {
@@ -257,7 +327,13 @@ func (t *Tournament) ClearPlayerExternalID(id int) error {
 }
 
 // GetPlayerExternalID returns the optional global identifier for a player.
-// The boolean indicates if an identifier is set.
+//
+// Inputs:
+//   - id: player ID
+//
+// Returns:
+//   - *int: pointer to the external ID if set, or nil
+//   - bool: true if an ID is set and the player exists; false otherwise
 func (t *Tournament) GetPlayerExternalID(id int) (*int, bool) {
 	player, exists := t.players[id]
 	if !exists {
@@ -270,6 +346,14 @@ func (t *Tournament) GetPlayerExternalID(id int) (*int, bool) {
 }
 
 // SetPlayerDecklist sets the player's decklist.
+// Nil maps are replaced with empty maps.
+//
+// Inputs:
+//   - id: player ID
+//   - deck: structured decklist (Main/Sideboard)
+//
+// Returns:
+//   - error: non-nil if the player does not exist
 func (t *Tournament) SetPlayerDecklist(id int, deck Decklist) error {
 	player, exists := t.players[id]
 	if !exists {
@@ -289,6 +373,12 @@ func (t *Tournament) SetPlayerDecklist(id int, deck Decklist) error {
 }
 
 // ClearPlayerDecklist removes the player's decklist.
+//
+// Inputs:
+//   - id: player ID
+//
+// Returns:
+//   - error: non-nil if the player does not exist
 func (t *Tournament) ClearPlayerDecklist(id int) error {
 	player, exists := t.players[id]
 	if !exists {
@@ -300,6 +390,13 @@ func (t *Tournament) ClearPlayerDecklist(id int) error {
 }
 
 // GetPlayerDecklist returns the player's decklist if present.
+//
+// Inputs:
+//   - id: player ID
+//
+// Returns:
+//   - *Decklist: pointer to decklist if set; nil otherwise
+//   - bool: true if a decklist is set and the player exists; false otherwise
 func (t *Tournament) GetPlayerDecklist(id int) (*Decklist, bool) {
 	player, exists := t.players[id]
 	if !exists {
@@ -404,6 +501,9 @@ func removeRandomPlayer(players []int) (int, []int) {
 	return selectedPlayer, players[:len(players)-1]
 }
 
+// AddResult records the game-level result for the match containing the given
+// player ID for the current round. Provide games won/lost/drawn from the
+// perspective of the specified player.
 func (t *Tournament) AddResult(id int, wins int, losses int, draws int) error {
 	// Defensive check: ensure round exists and has been paired
 	if t.currentRound >= len(t.rounds) {
@@ -651,7 +751,7 @@ func (t *Tournament) calculateTiebreakers(playerID int) TiebreakerData {
 			totalMatches := opponent.wins + opponent.losses + opponent.draws
 			if totalMatches > 0 {
 				opponentMatchWinPct := float64(opponent.wins) / float64(totalMatches)
-				// Apply minimum 33% rule for Magic tournaments
+				// Apply minimum 33% according to standard tiebreaker calculation
 				if opponentMatchWinPct < 0.33 {
 					opponentMatchWinPct = 0.33
 				}
@@ -662,7 +762,7 @@ func (t *Tournament) calculateTiebreakers(playerID int) TiebreakerData {
 			totalOpponentGames := opponent.gameWins + opponent.gameLosses + opponent.gameDraws
 			if totalOpponentGames > 0 {
 				opponentGameWinPct := float64(opponent.gameWins) / float64(totalOpponentGames)
-				// Apply minimum 33% rule for Magic tournaments
+				// Apply minimum 33% according to standard tiebreaker calculation
 				if opponentGameWinPct < 0.33 {
 					opponentGameWinPct = 0.33
 				}
