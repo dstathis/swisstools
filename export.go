@@ -66,7 +66,7 @@ func (t *Tournament) DumpTournament() ([]byte, error) {
 		p := t.players[id]
 		players = append(players, playerExport{
 			ID:             id,
-			Name:           p.name,
+			Name:           p.Name,
 			Points:         p.points,
 			Wins:           p.wins,
 			Losses:         p.losses,
@@ -138,7 +138,7 @@ func LoadTournament(data []byte) (Tournament, error) {
 	// Players
 	for _, pe := range payload.Players {
 		p := Player{
-			name:           pe.Name,
+			Name:           pe.Name,
 			points:         pe.Points,
 			wins:           pe.Wins,
 			losses:         pe.Losses,

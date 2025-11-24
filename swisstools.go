@@ -83,7 +83,7 @@ type Decklist struct {
 }
 
 type Player struct {
-	name           string
+	Name           string
 	points         int
 	wins           int
 	losses         int
@@ -142,14 +142,14 @@ func (t *Tournament) AddPlayer(name string) error {
 
 	// Check if player with this name already exists
 	for _, player := range t.players {
-		if player.name == name {
+		if player.Name == name {
 			return errors.New("player with this name already exists")
 		}
 	}
 
 	t.lastId++
 	player := Player{
-		name:  name,
+		Name:  name,
 		notes: []string{},
 		// points, wins, losses, draws are zero-initialized by Go
 	}
@@ -170,7 +170,7 @@ func (t *Tournament) FormatPlayers(w io.Writer) {
 	table.SetHeader([]string{"Name", "Wins", "Losses", "Points"})
 	for _, player := range t.players {
 		table.Append([]string{
-			player.name,
+			player.Name,
 			fmt.Sprintf("%d", player.wins),
 			fmt.Sprintf("%d", player.losses),
 			fmt.Sprintf("%d", player.points),
@@ -266,7 +266,7 @@ func (t *Tournament) GetPlayerById(id int) (Player, bool) {
 //   - bool: true if found, false otherwise
 func (t *Tournament) GetPlayerID(name string) (int, bool) {
 	for id, player := range t.players {
-		if player.name == name {
+		if player.Name == name {
 			return id, true
 		}
 	}
@@ -284,7 +284,7 @@ func (t *Tournament) GetPlayerID(name string) (int, bool) {
 //   - bool: true if found, false otherwise
 func (t *Tournament) GetPlayerByName(name string) (Player, bool) {
 	for _, player := range t.players {
-		if player.name == name {
+		if player.Name == name {
 			return player, true
 		}
 	}
@@ -1040,7 +1040,7 @@ func (t *Tournament) GetStandings() []PlayerStanding {
 		standings = append(standings, PlayerStanding{
 			Rank:        nextRank,
 			PlayerID:    playerID,
-			Name:        player.name,
+			Name:        player.Name,
 			Points:      player.points,
 			Wins:        player.wins,
 			Losses:      player.losses,

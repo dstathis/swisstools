@@ -9,8 +9,8 @@ import (
 func TestAddPlayerName(t *testing.T) {
 	tournament := NewTournament()
 	err := tournament.AddPlayer("Dylan")
-	if err != nil || tournament.players[1].name != "Dylan" {
-		t.Fatalf("Expecting player name Dylan, got %s.", tournament.players[1].name)
+	if err != nil || tournament.players[1].Name != "Dylan" {
+		t.Fatalf("Expecting player name Dylan, got %s.", tournament.players[1].Name)
 	}
 }
 
@@ -347,7 +347,7 @@ func TestUpdatePlayerStandingsAtomic(t *testing.T) {
 	// Initial stats should be 0
 	for _, player := range tournament.players {
 		if player.wins != 0 || player.losses != 0 || player.points != 0 {
-			t.Fatalf("Player %s should start with 0 stats", player.name)
+			t.Fatalf("Player %s should start with 0 stats", player.Name)
 		}
 	}
 
@@ -381,7 +381,7 @@ func TestUpdatePlayerStandingsAtomic(t *testing.T) {
 	for _, player := range tournament.players {
 		if player.wins != 0 || player.losses != 0 || player.points != 0 {
 			t.Errorf("Player %s stats were modified despite incomplete matches: wins=%d, losses=%d, points=%d",
-				player.name, player.wins, player.losses, player.points)
+				player.Name, player.wins, player.losses, player.points)
 		}
 	}
 
@@ -782,8 +782,8 @@ func TestTournamentStateManagement(t *testing.T) {
 	if !exists {
 		t.Error("Expected player 1 to exist")
 	}
-	if player.name != "Alice" {
-		t.Errorf("Expected player 1 to be Alice, got %s", player.name)
+	if player.Name != "Alice" {
+		t.Errorf("Expected player 1 to be Alice, got %s", player.Name)
 	}
 
 	id, exists := tournament.GetPlayerID("Bob")
@@ -923,8 +923,8 @@ func TestGetPlayerByName(t *testing.T) {
 	if !exists {
 		t.Fatal("Expected to find Bob")
 	}
-	if player.name != "Bob" {
-		t.Errorf("Expected player name 'Bob', got '%s'", player.name)
+	if player.Name != "Bob" {
+		t.Errorf("Expected player name 'Bob', got '%s'", player.Name)
 	}
 
 	// Test getting non-existent player
@@ -932,8 +932,8 @@ func TestGetPlayerByName(t *testing.T) {
 	if exists {
 		t.Error("Expected not to find David")
 	}
-	if player.name != "" {
-		t.Errorf("Expected empty name for non-existent player, got '%s'", player.name)
+	if player.Name != "" {
+		t.Errorf("Expected empty name for non-existent player, got '%s'", player.Name)
 	}
 
 	// Test case sensitivity
@@ -1502,8 +1502,8 @@ func TestDumpLoadBeforeStart(t *testing.T) {
 	}
 
 	p1, ok := restored.GetPlayerById(1)
-	if !ok || p1.name != "Alice" {
-		t.Fatalf("Expected Alice with ID 1, got ok=%v name=%s", ok, p1.name)
+	if !ok || p1.Name != "Alice" {
+		t.Fatalf("Expected Alice with ID 1, got ok=%v name=%s", ok, p1.Name)
 	}
 
 	// Verify optional fields
