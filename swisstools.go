@@ -69,6 +69,18 @@ type Tournament struct {
 	rounds       []Round
 	started      bool // Whether the tournament has started (first round paired)
 	finished     bool // Whether the tournament has finished
+	maxRounds    int  // Maximum number of rounds (0 = no limit)
+
+	// Playoff (single-elimination bracket after Swiss rounds)
+	playoff *Playoff
+}
+
+// Playoff holds the state of a single-elimination bracket.
+type Playoff struct {
+	Seeds        []int   // Player IDs in seed order (index 0 = seed 1)
+	Rounds       []Round // Bracket rounds (index 0 = quarterfinals/first round, last = finals)
+	CurrentRound int     // 0-based index into Rounds
+	Finished     bool
 }
 
 // Decklist represents a player's deck configuration.
@@ -84,20 +96,20 @@ type Decklist struct {
 
 type Player struct {
 	Name           string
-	points         int
-	wins           int
-	losses         int
-	draws          int
-	gameWins       int
-	gameLosses     int
-	gameDraws      int
-	notes          []string
-	removed        bool // Whether the player has been removed from the tournament
-	removedInRound int  // Round when the player was removed (0 if not removed)
+	Points         int
+	Wins           int
+	Losses         int
+	Draws          int
+	GameWins       int
+	GameLosses     int
+	GameDraws      int
+	Notes          []string
+	Removed        bool // Whether the player has been removed from the tournament
+	RemovedInRound int  // Round when the player was removed (0 if not removed)
 
 	// Optional metadata
-	externalID *int      // Optional global player identifier
-	decklist   *Decklist // Optional decklist; validation not implemented yet
+	ExternalID *int      // Optional global player identifier
+	Decklist   *Decklist // Optional decklist; validation not implemented yet
 }
 
 type Pairing struct {
@@ -115,6 +127,15 @@ func (p Pairing) PlayerA() int { return p.playera }
 
 // PlayerB returns the player ID for the second player in the pairing (or BYE_OPPONENT_ID for a bye).
 func (p Pairing) PlayerB() int { return p.playerb }
+
+// PlayerAWins returns the number of games won by player A in this pairing.
+func (p Pairing) PlayerAWins() int { return p.playeraWins }
+
+// PlayerBWins returns the number of games won by player B in this pairing.
+func (p Pairing) PlayerBWins() int { return p.playerbWins }
+
+// Draws returns the number of drawn games in this pairing.
+func (p Pairing) Draws() int { return p.draws }
 
 // NewTournament creates a Tournament with the default configuration.
 func NewTournament() Tournament {
@@ -150,14 +171,13 @@ func (t *Tournament) AddPlayer(name string) error {
 	t.lastId++
 	player := Player{
 		Name:  name,
-		notes: []string{},
-		// points, wins, losses, draws are zero-initialized by Go
+		Notes: []string{},
 	}
 	t.players[t.lastId] = player
 
 	// If tournament has started, add a note about late entry
 	if t.started {
-		player.notes = append(player.notes, fmt.Sprintf("Late entry - joined in round %d", t.currentRound))
+		player.Notes = append(player.Notes, fmt.Sprintf("Late entry - joined in round %d", t.currentRound))
 		t.players[t.lastId] = player
 	}
 
@@ -171,20 +191,25 @@ func (t *Tournament) FormatPlayers(w io.Writer) {
 	for _, player := range t.players {
 		table.Append([]string{
 			player.Name,
-			fmt.Sprintf("%d", player.wins),
-			fmt.Sprintf("%d", player.losses),
-			fmt.Sprintf("%d", player.points),
+			fmt.Sprintf("%d", player.Wins),
+			fmt.Sprintf("%d", player.Losses),
+			fmt.Sprintf("%d", player.Points),
 		})
 	}
 	table.Render()
 }
 
 // NextRound validates and applies results for the current round and advances
-// the tournament to the next round index.
+// the tournament to the next round index. If a max rounds cap has been set
+// and the current round equals that cap, the tournament is finished instead.
 func (t *Tournament) NextRound() error {
 	err := t.UpdatePlayerStandings()
 	if err != nil {
 		return err
+	}
+	if t.maxRounds > 0 && t.currentRound >= t.maxRounds {
+		t.finished = true
+		return nil
 	}
 	t.currentRound++
 	// Ensure the rounds slice has capacity for the new round
@@ -304,7 +329,7 @@ func (t *Tournament) SetPlayerExternalID(id int, externalID int) error {
 	if !exists {
 		return errors.New("player not found")
 	}
-	player.externalID = &externalID
+	player.ExternalID = &externalID
 	t.players[id] = player
 	return nil
 }
@@ -321,7 +346,7 @@ func (t *Tournament) ClearPlayerExternalID(id int) error {
 	if !exists {
 		return errors.New("player not found")
 	}
-	player.externalID = nil
+	player.ExternalID = nil
 	t.players[id] = player
 	return nil
 }
@@ -339,10 +364,10 @@ func (t *Tournament) GetPlayerExternalID(id int) (*int, bool) {
 	if !exists {
 		return nil, false
 	}
-	if player.externalID == nil {
+	if player.ExternalID == nil {
 		return nil, false
 	}
-	return player.externalID, true
+	return player.ExternalID, true
 }
 
 // SetPlayerDecklist sets the player's decklist.
@@ -367,7 +392,7 @@ func (t *Tournament) SetPlayerDecklist(id int, deck Decklist) error {
 		deck.Sideboard = map[string]int{}
 	}
 	dl := deck
-	player.decklist = &dl
+	player.Decklist = &dl
 	t.players[id] = player
 	return nil
 }
@@ -384,7 +409,7 @@ func (t *Tournament) ClearPlayerDecklist(id int) error {
 	if !exists {
 		return errors.New("player not found")
 	}
-	player.decklist = nil
+	player.Decklist = nil
 	t.players[id] = player
 	return nil
 }
@@ -402,10 +427,10 @@ func (t *Tournament) GetPlayerDecklist(id int) (*Decklist, bool) {
 	if !exists {
 		return nil, false
 	}
-	if player.decklist == nil {
+	if player.Decklist == nil {
 		return nil, false
 	}
-	return player.decklist, true
+	return player.Decklist, true
 }
 
 // RemovePlayerById removes a player from the tournament while preserving their history
@@ -466,8 +491,8 @@ func (t *Tournament) RemovePlayerById(id int) error {
 
 	// Mark player as removed (preserve history)
 	player := t.players[id]
-	player.removed = true
-	player.removedInRound = t.currentRound
+	player.Removed = true
+	player.RemovedInRound = t.currentRound
 	t.players[id] = player
 
 	return nil
@@ -568,12 +593,12 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		if pairing.playerb == BYE_OPPONENT_ID {
 			// Player gets a bye - worth PointsForWin (match win)
 			playerA := t.players[pairing.playera]
-			playerA.wins++
-			playerA.points += t.config.PointsForWin
+			playerA.Wins++
+			playerA.Points += t.config.PointsForWin
 			// Add bye game results
-			playerA.gameWins += t.config.ByeWins
-			playerA.gameLosses += t.config.ByeLosses
-			playerA.gameDraws += t.config.ByeDraws
+			playerA.GameWins += t.config.ByeWins
+			playerA.GameLosses += t.config.ByeLosses
+			playerA.GameDraws += t.config.ByeDraws
 			t.players[pairing.playera] = playerA
 			continue
 		}
@@ -583,31 +608,31 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		playerB := t.players[pairing.playerb]
 
 		// Add individual game results
-		playerA.gameWins += pairing.playeraWins
-		playerA.gameLosses += pairing.playerbWins
-		playerA.gameDraws += pairing.draws
-		playerB.gameWins += pairing.playerbWins
-		playerB.gameLosses += pairing.playeraWins
-		playerB.gameDraws += pairing.draws
+		playerA.GameWins += pairing.playeraWins
+		playerA.GameLosses += pairing.playerbWins
+		playerA.GameDraws += pairing.draws
+		playerB.GameWins += pairing.playerbWins
+		playerB.GameLosses += pairing.playeraWins
+		playerB.GameDraws += pairing.draws
 
 		if pairing.playeraWins > pairing.playerbWins {
 			// Player A wins the match
-			playerA.wins++
-			playerA.points += t.config.PointsForWin
-			playerB.losses++
-			playerB.points += t.config.PointsForLoss // Explicit for clarity (currently 0)
+			playerA.Wins++
+			playerA.Points += t.config.PointsForWin
+			playerB.Losses++
+			playerB.Points += t.config.PointsForLoss // Explicit for clarity (currently 0)
 		} else if pairing.playerbWins > pairing.playeraWins {
 			// Player B wins the match
-			playerB.wins++
-			playerB.points += t.config.PointsForWin
-			playerA.losses++
-			playerA.points += t.config.PointsForLoss // Explicit for clarity (currently 0)
+			playerB.Wins++
+			playerB.Points += t.config.PointsForWin
+			playerA.Losses++
+			playerA.Points += t.config.PointsForLoss // Explicit for clarity (currently 0)
 		} else {
 			// Match is drawn (equal games won, or both 0 with draws > 0)
-			playerA.draws++
-			playerA.points += t.config.PointsForDraw
-			playerB.draws++
-			playerB.points += t.config.PointsForDraw
+			playerA.Draws++
+			playerA.Points += t.config.PointsForDraw
+			playerB.Draws++
+			playerB.Points += t.config.PointsForDraw
 		}
 
 		// Update players in the map
@@ -711,10 +736,10 @@ func (t *Tournament) calculateTiebreakers(playerID int) TiebreakerData {
 	player := t.players[playerID]
 
 	// Calculate game win percentage
-	totalGames := player.gameWins + player.gameLosses + player.gameDraws
+	totalGames := player.GameWins + player.GameLosses + player.GameDraws
 	gameWinPct := 0.0
 	if totalGames > 0 {
-		gameWinPct = float64(player.gameWins) / float64(totalGames)
+		gameWinPct = float64(player.GameWins) / float64(totalGames)
 	}
 
 	// Calculate opponent match win percentages
@@ -748,9 +773,9 @@ func (t *Tournament) calculateTiebreakers(playerID int) TiebreakerData {
 			}
 
 			// Calculate opponent's match win percentage
-			totalMatches := opponent.wins + opponent.losses + opponent.draws
+			totalMatches := opponent.Wins + opponent.Losses + opponent.Draws
 			if totalMatches > 0 {
-				opponentMatchWinPct := float64(opponent.wins) / float64(totalMatches)
+				opponentMatchWinPct := float64(opponent.Wins) / float64(totalMatches)
 				// Apply minimum 33% according to standard tiebreaker calculation
 				if opponentMatchWinPct < 0.33 {
 					opponentMatchWinPct = 0.33
@@ -759,9 +784,9 @@ func (t *Tournament) calculateTiebreakers(playerID int) TiebreakerData {
 			}
 
 			// Calculate opponent's game win percentage
-			totalOpponentGames := opponent.gameWins + opponent.gameLosses + opponent.gameDraws
+			totalOpponentGames := opponent.GameWins + opponent.GameLosses + opponent.GameDraws
 			if totalOpponentGames > 0 {
-				opponentGameWinPct := float64(opponent.gameWins) / float64(totalOpponentGames)
+				opponentGameWinPct := float64(opponent.GameWins) / float64(totalOpponentGames)
 				// Apply minimum 33% according to standard tiebreaker calculation
 				if opponentGameWinPct < 0.33 {
 					opponentGameWinPct = 0.33
@@ -803,7 +828,7 @@ func (t *Tournament) getSortedPlayersWithTiebreakers() []int {
 	var players []int
 	for id, player := range t.players {
 		// Skip removed players
-		if !player.removed {
+		if !player.Removed {
 			players = append(players, id)
 		}
 	}
@@ -814,8 +839,8 @@ func (t *Tournament) getSortedPlayersWithTiebreakers() []int {
 		playerJ := t.players[players[j]]
 
 		// First by points
-		if playerI.points != playerJ.points {
-			return playerI.points > playerJ.points
+		if playerI.Points != playerJ.Points {
+			return playerI.Points > playerJ.Points
 		}
 
 		// Then by tiebreakers
@@ -849,7 +874,7 @@ func (t *Tournament) getSortedPlayers() []int {
 	var players []int
 	for id, player := range t.players {
 		// Skip removed players
-		if !player.removed {
+		if !player.Removed {
 			players = append(players, id)
 		}
 	}
@@ -858,7 +883,7 @@ func (t *Tournament) getSortedPlayers() []int {
 	sort.Slice(players, func(i, j int) bool {
 		playerI := t.players[players[i]]
 		playerJ := t.players[players[j]]
-		return playerI.points > playerJ.points
+		return playerI.Points > playerJ.Points
 	})
 
 	// Randomize players within same point groups
@@ -874,16 +899,16 @@ func (t *Tournament) randomizeWithinPointGroups(players []int) {
 	}
 
 	start := 0
-	currentPoints := t.players[players[0]].points
+	currentPoints := t.players[players[0]].Points
 
 	for i := 1; i < len(players); i++ {
-		if t.players[players[i]].points != currentPoints {
+		if t.players[players[i]].Points != currentPoints {
 			// Randomize the group from start to i-1
 			if i-start > 1 {
 				shufflePlayers(players[start:i])
 			}
 			start = i
-			currentPoints = t.players[players[i]].points
+			currentPoints = t.players[players[i]].Points
 		}
 	}
 
@@ -911,7 +936,7 @@ func (t *Tournament) findBestOpponent(playerID int, sortedPlayers []int, paired 
 			continue
 		}
 
-		if t.players[opponentID].points == player.points && !t.havePlayedBefore(playerID, opponentID) {
+		if t.players[opponentID].Points == player.Points && !t.havePlayedBefore(playerID, opponentID) {
 			return opponentID
 		}
 	}
@@ -965,7 +990,7 @@ func (t *Tournament) randomPair() error {
 
 	players := []int{}
 	for id, p := range t.players {
-		if !p.removed {
+		if !p.Removed {
 			players = append(players, id)
 		}
 	}
@@ -1021,7 +1046,7 @@ func (t *Tournament) GetStandings() []PlayerStanding {
 			prevPlayer := t.players[prevPlayerID]
 			prevTiebreakers := t.calculateTiebreakers(prevPlayerID)
 
-			if player.points == prevPlayer.points &&
+			if player.Points == prevPlayer.Points &&
 				tiebreakers.OpponentMatchWinPct == prevTiebreakers.OpponentMatchWinPct &&
 				tiebreakers.GameWinPercentage == prevTiebreakers.GameWinPercentage &&
 				tiebreakers.OpponentGameWinPct == prevTiebreakers.OpponentGameWinPct {
@@ -1041,13 +1066,235 @@ func (t *Tournament) GetStandings() []PlayerStanding {
 			Rank:        nextRank,
 			PlayerID:    playerID,
 			Name:        player.Name,
-			Points:      player.points,
-			Wins:        player.wins,
-			Losses:      player.losses,
-			Draws:       player.draws,
+			Points:      player.Points,
+			Wins:        player.Wins,
+			Losses:      player.Losses,
+			Draws:       player.Draws,
 			Tiebreakers: tiebreakers,
 		})
 	}
 
 	return standings
+}
+
+// GetPlayers returns a copy of the player map, keyed by player ID.
+// Includes removed players (history is preserved).
+func (t *Tournament) GetPlayers() map[int]Player {
+	out := make(map[int]Player, len(t.players))
+	for id, p := range t.players {
+		out[id] = p
+	}
+	return out
+}
+
+// GetRoundByNumber returns the pairings for the given 1-based round number.
+// Returns an error if the round number is out of range or contains no pairings.
+func (t *Tournament) GetRoundByNumber(round int) ([]Pairing, error) {
+	if round < 1 || round >= len(t.rounds) {
+		return nil, fmt.Errorf("round %d out of range", round)
+	}
+	return t.rounds[round], nil
+}
+
+// FinishTournament explicitly marks the tournament as finished.
+// The current round's results must be recorded first.
+func (t *Tournament) FinishTournament() error {
+	if !t.started {
+		return errors.New("tournament has not started")
+	}
+	if t.finished {
+		return errors.New("tournament is already finished")
+	}
+	err := t.UpdatePlayerStandings()
+	if err != nil {
+		return err
+	}
+	t.finished = true
+	return nil
+}
+
+// SetMaxRounds sets the maximum number of rounds for the tournament.
+// When NextRound is called and the current round equals this cap,
+// the tournament is automatically finished. Use 0 for no limit.
+func (t *Tournament) SetMaxRounds(n int) {
+	t.maxRounds = n
+}
+
+// GetMaxRounds returns the maximum number of rounds (0 = no limit).
+func (t *Tournament) GetMaxRounds() int {
+	return t.maxRounds
+}
+
+// StartPlayoff seeds the top N players from the Swiss standings into a
+// single-elimination bracket. N must be a power of 2 (4, 8, 16, …) and
+// must not exceed the number of non-removed players. The Swiss portion
+// must be finished before starting playoffs.
+//
+// Seeding uses standard bracket order: seed 1 vs seed N, seed 2 vs seed N-1, etc.
+func (t *Tournament) StartPlayoff(topN int) error {
+	if !t.finished {
+		return errors.New("swiss rounds must be finished before starting playoffs")
+	}
+	if t.playoff != nil {
+		return errors.New("playoff has already been started")
+	}
+	if topN < 2 || topN&(topN-1) != 0 {
+		return fmt.Errorf("topN must be a power of 2 (got %d)", topN)
+	}
+
+	standings := t.GetStandings()
+	if topN > len(standings) {
+		return fmt.Errorf("not enough players: need %d, have %d", topN, len(standings))
+	}
+
+	seeds := make([]int, topN)
+	for i := 0; i < topN; i++ {
+		seeds[i] = standings[i].PlayerID
+	}
+
+	// Build first round pairings: seed 1 vs seed N, seed 2 vs seed N-1, …
+	var pairings []Pairing
+	for i := 0; i < topN/2; i++ {
+		pairings = append(pairings, Pairing{
+			playera:     seeds[i],
+			playerb:     seeds[topN-1-i],
+			playeraWins: UNINITIALIZED_RESULT,
+			playerbWins: UNINITIALIZED_RESULT,
+			draws:       UNINITIALIZED_RESULT,
+		})
+	}
+
+	// Pre-allocate all bracket rounds
+	numRounds := 0
+	for n := topN; n > 1; n /= 2 {
+		numRounds++
+	}
+	rounds := make([]Round, numRounds)
+	rounds[0] = pairings
+
+	t.playoff = &Playoff{
+		Seeds:        seeds,
+		Rounds:       rounds,
+		CurrentRound: 0,
+		Finished:     false,
+	}
+	return nil
+}
+
+// GetPlayoff returns the playoff bracket, or nil if no playoff has been started.
+func (t *Tournament) GetPlayoff() *Playoff {
+	return t.playoff
+}
+
+// GetPlayoffRound returns the pairings for the current playoff round.
+func (t *Tournament) GetPlayoffRound() []Pairing {
+	if t.playoff == nil {
+		return nil
+	}
+	return t.playoff.Rounds[t.playoff.CurrentRound]
+}
+
+// GetPlayoffRoundByNumber returns pairings for the given 0-based playoff round.
+func (t *Tournament) GetPlayoffRoundByNumber(round int) ([]Pairing, error) {
+	if t.playoff == nil {
+		return nil, errors.New("no playoff started")
+	}
+	if round < 0 || round >= len(t.playoff.Rounds) {
+		return nil, fmt.Errorf("playoff round %d out of range", round)
+	}
+	return t.playoff.Rounds[round], nil
+}
+
+// AddPlayoffResult records game-level results for a playoff match containing
+// the given player ID in the current playoff round.
+// Draws are recorded but the caller must still ensure one player advances
+// (i.e. one player should have more game wins than the other).
+func (t *Tournament) AddPlayoffResult(id int, wins int, losses int, draws int) error {
+	if t.playoff == nil {
+		return errors.New("no playoff started")
+	}
+	if t.playoff.Finished {
+		return errors.New("playoff is already finished")
+	}
+
+	round := t.playoff.Rounds[t.playoff.CurrentRound]
+	for i, pairing := range round {
+		if pairing.playera == id {
+			t.playoff.Rounds[t.playoff.CurrentRound][i].playeraWins = wins
+			t.playoff.Rounds[t.playoff.CurrentRound][i].playerbWins = losses
+			t.playoff.Rounds[t.playoff.CurrentRound][i].draws = draws
+			return nil
+		}
+		if pairing.playerb == id {
+			t.playoff.Rounds[t.playoff.CurrentRound][i].playerbWins = wins
+			t.playoff.Rounds[t.playoff.CurrentRound][i].playeraWins = losses
+			t.playoff.Rounds[t.playoff.CurrentRound][i].draws = draws
+			return nil
+		}
+	}
+	return errors.New("player not found in current playoff round")
+}
+
+// NextPlayoffRound validates results, determines winners, and either
+// creates the next round's pairings or finishes the playoff.
+func (t *Tournament) NextPlayoffRound() error {
+	if t.playoff == nil {
+		return errors.New("no playoff started")
+	}
+	if t.playoff.Finished {
+		return errors.New("playoff is already finished")
+	}
+
+	round := t.playoff.Rounds[t.playoff.CurrentRound]
+
+	// Validate all matches are complete and have a clear winner
+	var winners []int
+	for _, pairing := range round {
+		if pairing.playeraWins == UNINITIALIZED_RESULT || pairing.playerbWins == UNINITIALIZED_RESULT {
+			return errors.New("incomplete playoff match - all matches must have results")
+		}
+		if pairing.playeraWins == pairing.playerbWins {
+			return errors.New("playoff match cannot be drawn - one player must advance")
+		}
+		if pairing.playeraWins > pairing.playerbWins {
+			winners = append(winners, pairing.playera)
+		} else {
+			winners = append(winners, pairing.playerb)
+		}
+	}
+
+	// If only one winner, that's the champion — playoff is done
+	if len(winners) == 1 {
+		t.playoff.Finished = true
+		return nil
+	}
+
+	// Pair winners for the next round (maintain bracket order)
+	t.playoff.CurrentRound++
+	var nextPairings []Pairing
+	for i := 0; i < len(winners); i += 2 {
+		nextPairings = append(nextPairings, Pairing{
+			playera:     winners[i],
+			playerb:     winners[i+1],
+			playeraWins: UNINITIALIZED_RESULT,
+			playerbWins: UNINITIALIZED_RESULT,
+			draws:       UNINITIALIZED_RESULT,
+		})
+	}
+	t.playoff.Rounds[t.playoff.CurrentRound] = nextPairings
+	return nil
+}
+
+// GetPlayoffStatus returns the current state of the playoff.
+//
+// Returns:
+//   - string: "none", "in_progress", or "finished"
+func (t *Tournament) GetPlayoffStatus() string {
+	if t.playoff == nil {
+		return "none"
+	}
+	if t.playoff.Finished {
+		return "finished"
+	}
+	return "in_progress"
 }

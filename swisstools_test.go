@@ -2,6 +2,7 @@ package swisstools
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -182,10 +183,10 @@ func TestUpdatePlayerStandings(t *testing.T) {
 	totalPoints := 0
 
 	for _, player := range tournament.players {
-		totalWins += player.wins
-		totalLosses += player.losses
-		totalDraws += player.draws
-		totalPoints += player.points
+		totalWins += player.Wins
+		totalLosses += player.Losses
+		totalDraws += player.Draws
+		totalPoints += player.Points
 	}
 
 	// We should have 2 wins total (1 from match, 1 from bye), 1 loss, 0 draws
@@ -227,11 +228,11 @@ func TestUpdatePlayerStandingsCumulative(t *testing.T) {
 	// Check round 1 stats (after NextRound updates them)
 	alice := tournament.players[1]
 	bob := tournament.players[2]
-	if alice.wins != 1 || alice.points != 3 {
-		t.Errorf("After round 1: Alice should have 1 win, 3 points, got wins=%d, points=%d", alice.wins, alice.points)
+	if alice.Wins != 1 || alice.Points != 3 {
+		t.Errorf("After round 1: Alice should have 1 win, 3 points, got wins=%d, points=%d", alice.Wins, alice.Points)
 	}
-	if bob.losses != 1 || bob.points != 0 {
-		t.Errorf("After round 1: Bob should have 1 loss, 0 points, got losses=%d, points=%d", bob.losses, bob.points)
+	if bob.Losses != 1 || bob.Points != 0 {
+		t.Errorf("After round 1: Bob should have 1 loss, 0 points, got losses=%d, points=%d", bob.Losses, bob.Points)
 	}
 	tournament.Pair(false)
 	err = tournament.AddResult(2, 2, 1, 0) // Bob wins 2-1
@@ -248,11 +249,11 @@ func TestUpdatePlayerStandingsCumulative(t *testing.T) {
 	// Check cumulative stats after round 2
 	alice = tournament.players[1]
 	bob = tournament.players[2]
-	if alice.wins != 1 || alice.losses != 1 || alice.points != 3 {
-		t.Errorf("After round 2: Alice should have 1 win, 1 loss, 3 points, got wins=%d, losses=%d, points=%d", alice.wins, alice.losses, alice.points)
+	if alice.Wins != 1 || alice.Losses != 1 || alice.Points != 3 {
+		t.Errorf("After round 2: Alice should have 1 win, 1 loss, 3 points, got wins=%d, losses=%d, points=%d", alice.Wins, alice.Losses, alice.Points)
 	}
-	if bob.wins != 1 || bob.losses != 1 || bob.points != 3 {
-		t.Errorf("After round 2: Bob should have 1 win, 1 loss, 3 points, got wins=%d, losses=%d, points=%d", bob.wins, bob.losses, bob.points)
+	if bob.Wins != 1 || bob.Losses != 1 || bob.Points != 3 {
+		t.Errorf("After round 2: Bob should have 1 win, 1 loss, 3 points, got wins=%d, losses=%d, points=%d", bob.Wins, bob.Losses, bob.Points)
 	}
 
 	t.Log("Cumulative player standings working correctly across multiple rounds")
@@ -297,11 +298,11 @@ func TestUpdatePlayerStandingsDraws(t *testing.T) {
 	bob := tournament.players[2]
 
 	// Both should have 1 draw and 1 point
-	if alice.draws != 1 || alice.points != 1 {
-		t.Errorf("Alice should have 1 draw and 1 point, got draws=%d, points=%d", alice.draws, alice.points)
+	if alice.Draws != 1 || alice.Points != 1 {
+		t.Errorf("Alice should have 1 draw and 1 point, got draws=%d, points=%d", alice.Draws, alice.Points)
 	}
-	if bob.draws != 1 || bob.points != 1 {
-		t.Errorf("Bob should have 1 draw and 1 point, got draws=%d, points=%d", bob.draws, bob.points)
+	if bob.Draws != 1 || bob.Points != 1 {
+		t.Errorf("Bob should have 1 draw and 1 point, got draws=%d, points=%d", bob.Draws, bob.Points)
 	}
 }
 
@@ -346,7 +347,7 @@ func TestUpdatePlayerStandingsAtomic(t *testing.T) {
 
 	// Initial stats should be 0
 	for _, player := range tournament.players {
-		if player.wins != 0 || player.losses != 0 || player.points != 0 {
+		if player.Wins != 0 || player.Losses != 0 || player.Points != 0 {
 			t.Fatalf("Player %s should start with 0 stats", player.Name)
 		}
 	}
@@ -379,9 +380,9 @@ func TestUpdatePlayerStandingsAtomic(t *testing.T) {
 
 	// Verify NO player stats were updated (atomic behavior)
 	for _, player := range tournament.players {
-		if player.wins != 0 || player.losses != 0 || player.points != 0 {
+		if player.Wins != 0 || player.Losses != 0 || player.Points != 0 {
 			t.Errorf("Player %s stats were modified despite incomplete matches: wins=%d, losses=%d, points=%d",
-				player.Name, player.wins, player.losses, player.points)
+				player.Name, player.Wins, player.Losses, player.Points)
 		}
 	}
 
@@ -440,9 +441,9 @@ func TestCorrectPointsSystem(t *testing.T) {
 	totalDraws := 0
 
 	for _, player := range tournament.players {
-		totalPoints += player.points
-		totalWins += player.wins
-		totalDraws += player.draws
+		totalPoints += player.Points
+		totalWins += player.Wins
+		totalDraws += player.Draws
 	}
 
 	// With 3 players across 2 rounds, we should have specific point totals
@@ -815,7 +816,7 @@ func TestTournamentStateManagement(t *testing.T) {
 		t.Error("Player should still exist after removal")
 	}
 
-	if !player.removed {
+	if !player.Removed {
 		t.Error("Expected player to be marked as removed")
 	}
 
@@ -855,7 +856,7 @@ func TestPlayerManagementDuringTournament(t *testing.T) {
 	}
 
 	hasLateEntryNote := false
-	for _, note := range player.notes {
+	for _, note := range player.Notes {
 		if strings.Contains(note, "Late entry") {
 			hasLateEntryNote = true
 			break
@@ -889,7 +890,7 @@ func TestPlayerManagementDuringTournament(t *testing.T) {
 		t.Error("Charlie should still exist but be marked as removed")
 	}
 
-	if !player.removed {
+	if !player.Removed {
 		t.Error("Expected Charlie to be marked as removed")
 	}
 
@@ -1068,7 +1069,7 @@ func TestRemovePlayerByName(t *testing.T) {
 		t.Error("Bob should still exist but be marked as removed")
 	}
 
-	if !player.removed {
+	if !player.Removed {
 		t.Error("Expected Bob to be marked as removed")
 	}
 
@@ -1608,7 +1609,7 @@ func TestDumpLoadWithRemovedPlayer(t *testing.T) {
 	if !ok {
 		t.Fatal("Expected player 2 to exist after restore")
 	}
-	if !p2.removed {
+	if !p2.Removed {
 		t.Fatal("Expected player 2 to remain marked as removed after restore")
 	}
 
@@ -1620,5 +1621,702 @@ func TestDumpLoadWithRemovedPlayer(t *testing.T) {
 		if p.playera == 2 || p.playerb == 2 {
 			t.Fatal("Removed player should not be paired after restore")
 		}
+	}
+}
+
+func TestPairingResultAccessors(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+
+	tournament.Pair(false)
+	pairings := tournament.GetRound()
+	if len(pairings) == 0 {
+		t.Fatal("Expected pairings")
+	}
+
+	// Before results, values are UNINITIALIZED_RESULT
+	p := pairings[0]
+	if p.PlayerAWins() != UNINITIALIZED_RESULT {
+		t.Errorf("Expected UNINITIALIZED_RESULT for PlayerAWins, got %d", p.PlayerAWins())
+	}
+
+	// Add a result and re-read
+	err := tournament.AddResult(p.PlayerA(), 2, 1, 1)
+	if err != nil {
+		t.Fatalf("AddResult failed: %v", err)
+	}
+	pairings = tournament.GetRound()
+	p = pairings[0]
+
+	if p.PlayerAWins() != 2 {
+		t.Errorf("Expected PlayerAWins=2, got %d", p.PlayerAWins())
+	}
+	if p.PlayerBWins() != 1 {
+		t.Errorf("Expected PlayerBWins=1, got %d", p.PlayerBWins())
+	}
+	if p.Draws() != 1 {
+		t.Errorf("Expected Draws=1, got %d", p.Draws())
+	}
+}
+
+func TestGetPlayers(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.AddPlayer("Charlie")
+
+	players := tournament.GetPlayers()
+	if len(players) != 3 {
+		t.Fatalf("Expected 3 players, got %d", len(players))
+	}
+
+	// Verify names
+	names := map[string]bool{}
+	for _, p := range players {
+		names[p.Name] = true
+	}
+	for _, expected := range []string{"Alice", "Bob", "Charlie"} {
+		if !names[expected] {
+			t.Errorf("Expected player %s in GetPlayers result", expected)
+		}
+	}
+
+	// Verify mutation safety: modifying returned map doesn't affect tournament
+	delete(players, 1)
+	if tournament.GetPlayerCount() != 3 {
+		t.Error("Modifying GetPlayers result should not affect tournament")
+	}
+}
+
+func TestGetPlayersIncludesRemoved(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.RemovePlayerById(1)
+
+	players := tournament.GetPlayers()
+	if len(players) != 2 {
+		t.Fatalf("Expected 2 players (including removed), got %d", len(players))
+	}
+	if !players[1].Removed {
+		t.Error("Expected player 1 to be marked as removed")
+	}
+}
+
+func TestGetRoundByNumber(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+
+	// Start and complete round 1
+	tournament.StartTournament()
+	pairings := tournament.GetRound()
+	for _, p := range pairings {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			tournament.AddResult(p.PlayerA(), 2, 0, 0)
+		}
+	}
+	tournament.NextRound()
+
+	// Pair round 2
+	tournament.Pair(false)
+
+	// Round 1 should be retrievable
+	r1, err := tournament.GetRoundByNumber(1)
+	if err != nil {
+		t.Fatalf("GetRoundByNumber(1) failed: %v", err)
+	}
+	if len(r1) == 0 {
+		t.Fatal("Expected pairings in round 1")
+	}
+
+	// Round 2 should also work (current round)
+	r2, err := tournament.GetRoundByNumber(2)
+	if err != nil {
+		t.Fatalf("GetRoundByNumber(2) failed: %v", err)
+	}
+	if len(r2) == 0 {
+		t.Fatal("Expected pairings in round 2")
+	}
+
+	// Results from round 1 should be readable via accessors
+	for _, p := range r1 {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			if p.PlayerAWins() == UNINITIALIZED_RESULT {
+				t.Error("Expected round 1 results to be set")
+			}
+		}
+	}
+
+	// Out of range
+	_, err = tournament.GetRoundByNumber(0)
+	if err == nil {
+		t.Error("Expected error for round 0")
+	}
+	_, err = tournament.GetRoundByNumber(99)
+	if err == nil {
+		t.Error("Expected error for round 99")
+	}
+}
+
+func TestFinishTournament(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+
+	// Cannot finish before starting
+	err := tournament.FinishTournament()
+	if err == nil {
+		t.Fatal("Expected error finishing un-started tournament")
+	}
+
+	tournament.StartTournament()
+
+	// Complete results
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			tournament.AddResult(p.PlayerA(), 2, 0, 0)
+		}
+	}
+
+	// Finish
+	err = tournament.FinishTournament()
+	if err != nil {
+		t.Fatalf("FinishTournament failed: %v", err)
+	}
+	if tournament.GetStatus() != "finished" {
+		t.Errorf("Expected status 'finished', got '%s'", tournament.GetStatus())
+	}
+
+	// Cannot finish again
+	err = tournament.FinishTournament()
+	if err == nil {
+		t.Fatal("Expected error finishing already-finished tournament")
+	}
+}
+
+func TestSetMaxRoundsAutoFinish(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.SetMaxRounds(2)
+
+	if tournament.GetMaxRounds() != 2 {
+		t.Fatalf("Expected maxRounds=2, got %d", tournament.GetMaxRounds())
+	}
+
+	tournament.StartTournament()
+
+	// Round 1
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			tournament.AddResult(p.PlayerA(), 2, 0, 0)
+		}
+	}
+	err := tournament.NextRound()
+	if err != nil {
+		t.Fatalf("NextRound failed: %v", err)
+	}
+	if tournament.GetStatus() != "in_progress" {
+		t.Error("Expected in_progress after round 1 of 2")
+	}
+
+	// Round 2
+	tournament.Pair(false)
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			tournament.AddResult(p.PlayerA(), 2, 0, 0)
+		}
+	}
+	err = tournament.NextRound()
+	if err != nil {
+		t.Fatalf("NextRound after round 2 failed: %v", err)
+	}
+	if tournament.GetStatus() != "finished" {
+		t.Errorf("Expected 'finished' after max rounds reached, got '%s'", tournament.GetStatus())
+	}
+}
+
+func TestMaxRoundsZeroMeansNoLimit(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	// maxRounds defaults to 0 (no limit)
+	if tournament.GetMaxRounds() != 0 {
+		t.Fatalf("Expected default maxRounds=0, got %d", tournament.GetMaxRounds())
+	}
+
+	tournament.StartTournament()
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			tournament.AddResult(p.PlayerA(), 2, 0, 0)
+		}
+	}
+	// Should advance normally without finishing
+	err := tournament.NextRound()
+	if err != nil {
+		t.Fatalf("NextRound failed: %v", err)
+	}
+	if tournament.GetStatus() != "in_progress" {
+		t.Errorf("Expected in_progress with no max rounds, got '%s'", tournament.GetStatus())
+	}
+}
+
+func TestPlayerExportedFields(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+
+	tournament.Pair(false)
+	tournament.AddResult(1, 2, 1, 0)
+	tournament.UpdatePlayerStandings()
+
+	// Access exported fields through GetPlayerById
+	alice, ok := tournament.GetPlayerById(1)
+	if !ok {
+		t.Fatal("Expected to find Alice")
+	}
+	if alice.Points != 3 {
+		t.Errorf("Expected Points=3, got %d", alice.Points)
+	}
+	if alice.Wins != 1 {
+		t.Errorf("Expected Wins=1, got %d", alice.Wins)
+	}
+	if alice.GameWins != 2 {
+		t.Errorf("Expected GameWins=2, got %d", alice.GameWins)
+	}
+	if alice.GameLosses != 1 {
+		t.Errorf("Expected GameLosses=1, got %d", alice.GameLosses)
+	}
+
+	bob, ok := tournament.GetPlayerById(2)
+	if !ok {
+		t.Fatal("Expected to find Bob")
+	}
+	if bob.Losses != 1 {
+		t.Errorf("Expected Losses=1, got %d", bob.Losses)
+	}
+}
+
+func TestDumpLoadMaxRounds(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.SetMaxRounds(5)
+
+	data, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament failed: %v", err)
+	}
+
+	restored, err := LoadTournament(data)
+	if err != nil {
+		t.Fatalf("LoadTournament failed: %v", err)
+	}
+
+	if restored.GetMaxRounds() != 5 {
+		t.Errorf("Expected maxRounds=5 after restore, got %d", restored.GetMaxRounds())
+	}
+}
+
+// --- Playoff tests ---
+
+// runSwissToFinish is a test helper that creates a tournament with the given
+// number of players, plays through the Swiss rounds, and finishes it.
+func runSwissToFinish(t *testing.T, numPlayers int) Tournament {
+	t.Helper()
+	tournament := NewTournament()
+	for i := 1; i <= numPlayers; i++ {
+		tournament.AddPlayer(fmt.Sprintf("Player%d", i))
+	}
+	if err := tournament.StartTournament(); err != nil {
+		t.Fatalf("StartTournament: %v", err)
+	}
+	// Play 3 rounds
+	for round := 1; round <= 3; round++ {
+		for _, p := range tournament.GetRound() {
+			if p.PlayerB() != BYE_OPPONENT_ID {
+				// Higher-seeded player wins
+				if err := tournament.AddResult(p.PlayerA(), 2, 1, 0); err != nil {
+					t.Fatalf("AddResult round %d: %v", round, err)
+				}
+			}
+		}
+		if round < 3 {
+			if err := tournament.NextRound(); err != nil {
+				t.Fatalf("NextRound %d: %v", round, err)
+			}
+			tournament.Pair(false)
+		}
+	}
+	if err := tournament.FinishTournament(); err != nil {
+		t.Fatalf("FinishTournament: %v", err)
+	}
+	return tournament
+}
+
+func TestStartPlayoffRequiresFinished(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+	tournament.StartTournament()
+
+	err := tournament.StartPlayoff(2)
+	if err == nil {
+		t.Fatal("Expected error starting playoff before Swiss is finished")
+	}
+}
+
+func TestStartPlayoffPowerOfTwo(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+
+	// 3 is not a power of 2
+	err := tournament.StartPlayoff(3)
+	if err == nil {
+		t.Fatal("Expected error for non-power-of-2 topN")
+	}
+
+	// 1 is not valid
+	err = tournament.StartPlayoff(1)
+	if err == nil {
+		t.Fatal("Expected error for topN=1")
+	}
+
+	// 4 should work
+	err = tournament.StartPlayoff(4)
+	if err != nil {
+		t.Fatalf("StartPlayoff(4) failed: %v", err)
+	}
+}
+
+func TestStartPlayoffNotEnoughPlayers(t *testing.T) {
+	tournament := runSwissToFinish(t, 4)
+
+	err := tournament.StartPlayoff(8)
+	if err == nil {
+		t.Fatal("Expected error when topN exceeds player count")
+	}
+}
+
+func TestStartPlayoffDouble(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	tournament.StartPlayoff(4)
+
+	err := tournament.StartPlayoff(4)
+	if err == nil {
+		t.Fatal("Expected error starting playoff twice")
+	}
+}
+
+func TestPlayoffTop4FullBracket(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+
+	err := tournament.StartPlayoff(4)
+	if err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+
+	if tournament.GetPlayoffStatus() != "in_progress" {
+		t.Errorf("Expected playoff in_progress, got %s", tournament.GetPlayoffStatus())
+	}
+
+	playoff := tournament.GetPlayoff()
+	if playoff == nil {
+		t.Fatal("Expected non-nil playoff")
+	}
+	if len(playoff.Seeds) != 4 {
+		t.Fatalf("Expected 4 seeds, got %d", len(playoff.Seeds))
+	}
+	// Should have 2 rounds total (semis + finals)
+	if len(playoff.Rounds) != 2 {
+		t.Fatalf("Expected 2 playoff rounds for top 4, got %d", len(playoff.Rounds))
+	}
+
+	// Semifinals: 2 matches
+	semis := tournament.GetPlayoffRound()
+	if len(semis) != 2 {
+		t.Fatalf("Expected 2 semifinal matches, got %d", len(semis))
+	}
+
+	// Verify seeding: seed1 vs seed4, seed2 vs seed3
+	if semis[0].PlayerA() != playoff.Seeds[0] || semis[0].PlayerB() != playoff.Seeds[3] {
+		t.Error("First semi should be seed 1 vs seed 4")
+	}
+	if semis[1].PlayerA() != playoff.Seeds[1] || semis[1].PlayerB() != playoff.Seeds[2] {
+		t.Error("Second semi should be seed 2 vs seed 3")
+	}
+
+	// Record semifinal results: higher seeds win
+	for _, p := range semis {
+		err := tournament.AddPlayoffResult(p.PlayerA(), 2, 1, 0)
+		if err != nil {
+			t.Fatalf("AddPlayoffResult semi: %v", err)
+		}
+	}
+
+	// Advance to finals
+	err = tournament.NextPlayoffRound()
+	if err != nil {
+		t.Fatalf("NextPlayoffRound: %v", err)
+	}
+
+	finals := tournament.GetPlayoffRound()
+	if len(finals) != 1 {
+		t.Fatalf("Expected 1 final match, got %d", len(finals))
+	}
+
+	// Record final result
+	err = tournament.AddPlayoffResult(finals[0].PlayerA(), 2, 0, 0)
+	if err != nil {
+		t.Fatalf("AddPlayoffResult final: %v", err)
+	}
+
+	// Finish playoff
+	err = tournament.NextPlayoffRound()
+	if err != nil {
+		t.Fatalf("NextPlayoffRound final: %v", err)
+	}
+
+	if tournament.GetPlayoffStatus() != "finished" {
+		t.Errorf("Expected playoff finished, got %s", tournament.GetPlayoffStatus())
+	}
+}
+
+func TestPlayoffTop8(t *testing.T) {
+	tournament := runSwissToFinish(t, 16)
+
+	err := tournament.StartPlayoff(8)
+	if err != nil {
+		t.Fatalf("StartPlayoff(8): %v", err)
+	}
+
+	playoff := tournament.GetPlayoff()
+	// 8 -> 3 rounds (quarters, semis, finals)
+	if len(playoff.Rounds) != 3 {
+		t.Fatalf("Expected 3 playoff rounds for top 8, got %d", len(playoff.Rounds))
+	}
+
+	// Play through all 3 rounds
+	for round := 0; round < 3; round++ {
+		pairings := tournament.GetPlayoffRound()
+		for _, p := range pairings {
+			tournament.AddPlayoffResult(p.PlayerA(), 2, 0, 0)
+		}
+		err := tournament.NextPlayoffRound()
+		if err != nil {
+			t.Fatalf("NextPlayoffRound round %d: %v", round, err)
+		}
+	}
+
+	if tournament.GetPlayoffStatus() != "finished" {
+		t.Errorf("Expected finished after 3 rounds, got %s", tournament.GetPlayoffStatus())
+	}
+}
+
+func TestPlayoffIncompleteResults(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	tournament.StartPlayoff(4)
+
+	// Try to advance without results
+	err := tournament.NextPlayoffRound()
+	if err == nil {
+		t.Fatal("Expected error advancing without results")
+	}
+
+	// Add result for only one match
+	semis := tournament.GetPlayoffRound()
+	tournament.AddPlayoffResult(semis[0].PlayerA(), 2, 0, 0)
+
+	err = tournament.NextPlayoffRound()
+	if err == nil {
+		t.Fatal("Expected error with partial results")
+	}
+}
+
+func TestPlayoffDrawNotAllowed(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	tournament.StartPlayoff(4)
+
+	semis := tournament.GetPlayoffRound()
+	// Both matches result in draws
+	tournament.AddPlayoffResult(semis[0].PlayerA(), 1, 1, 0)
+	tournament.AddPlayoffResult(semis[1].PlayerA(), 2, 0, 0)
+
+	err := tournament.NextPlayoffRound()
+	if err == nil {
+		t.Fatal("Expected error when playoff match is drawn")
+	}
+}
+
+func TestPlayoffGetRoundByNumber(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	tournament.StartPlayoff(4)
+
+	// Round 0 should have semis
+	r0, err := tournament.GetPlayoffRoundByNumber(0)
+	if err != nil {
+		t.Fatalf("GetPlayoffRoundByNumber(0): %v", err)
+	}
+	if len(r0) != 2 {
+		t.Errorf("Expected 2 matches in round 0, got %d", len(r0))
+	}
+
+	// Out of range
+	_, err = tournament.GetPlayoffRoundByNumber(-1)
+	if err == nil {
+		t.Error("Expected error for negative round")
+	}
+	_, err = tournament.GetPlayoffRoundByNumber(5)
+	if err == nil {
+		t.Error("Expected error for round beyond bracket")
+	}
+
+	// No playoff
+	t2 := runSwissToFinish(t, 4)
+	_, err = t2.GetPlayoffRoundByNumber(0)
+	if err == nil {
+		t.Error("Expected error when no playoff started")
+	}
+}
+
+func TestPlayoffResultAccessors(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	tournament.StartPlayoff(4)
+
+	semis := tournament.GetPlayoffRound()
+	tournament.AddPlayoffResult(semis[0].PlayerA(), 2, 1, 1)
+
+	// Re-read to get updated values
+	semis = tournament.GetPlayoffRound()
+	if semis[0].PlayerAWins() != 2 || semis[0].PlayerBWins() != 1 || semis[0].Draws() != 1 {
+		t.Errorf("Playoff result accessors: got A=%d B=%d D=%d, want A=2 B=1 D=1",
+			semis[0].PlayerAWins(), semis[0].PlayerBWins(), semis[0].Draws())
+	}
+}
+
+func TestAddPlayoffResultPlayerB(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	tournament.StartPlayoff(4)
+
+	semis := tournament.GetPlayoffRound()
+	// Add result from playerB's perspective
+	err := tournament.AddPlayoffResult(semis[0].PlayerB(), 2, 1, 0)
+	if err != nil {
+		t.Fatalf("AddPlayoffResult for playerB: %v", err)
+	}
+
+	semis = tournament.GetPlayoffRound()
+	if semis[0].PlayerBWins() != 2 || semis[0].PlayerAWins() != 1 {
+		t.Error("Result from playerB perspective not recorded correctly")
+	}
+}
+
+func TestPlayoffNoPlayoffErrors(t *testing.T) {
+	tournament := NewTournament()
+
+	if tournament.GetPlayoffStatus() != "none" {
+		t.Error("Expected 'none' playoff status")
+	}
+	if tournament.GetPlayoff() != nil {
+		t.Error("Expected nil playoff")
+	}
+	if tournament.GetPlayoffRound() != nil {
+		t.Error("Expected nil from GetPlayoffRound")
+	}
+	err := tournament.AddPlayoffResult(1, 2, 0, 0)
+	if err == nil {
+		t.Error("Expected error from AddPlayoffResult with no playoff")
+	}
+	err = tournament.NextPlayoffRound()
+	if err == nil {
+		t.Error("Expected error from NextPlayoffRound with no playoff")
+	}
+}
+
+func TestPlayoffAddResultAfterFinished(t *testing.T) {
+	tournament := runSwissToFinish(t, 4)
+	tournament.StartPlayoff(2)
+
+	// Top 2 - single match is the final
+	finals := tournament.GetPlayoffRound()
+	tournament.AddPlayoffResult(finals[0].PlayerA(), 2, 0, 0)
+	tournament.NextPlayoffRound()
+
+	// Should be finished
+	if tournament.GetPlayoffStatus() != "finished" {
+		t.Fatal("Expected playoff to be finished")
+	}
+
+	err := tournament.AddPlayoffResult(finals[0].PlayerA(), 2, 0, 0)
+	if err == nil {
+		t.Error("Expected error adding result to finished playoff")
+	}
+
+	err = tournament.NextPlayoffRound()
+	if err == nil {
+		t.Error("Expected error advancing finished playoff")
+	}
+}
+
+func TestPlayoffPlayerNotFound(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	tournament.StartPlayoff(4)
+
+	err := tournament.AddPlayoffResult(999, 2, 0, 0)
+	if err == nil {
+		t.Error("Expected error for non-existent player in playoff")
+	}
+}
+
+func TestDumpLoadPlayoff(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	tournament.StartPlayoff(4)
+
+	// Complete semifinals
+	semis := tournament.GetPlayoffRound()
+	for _, p := range semis {
+		tournament.AddPlayoffResult(p.PlayerA(), 2, 1, 0)
+	}
+	tournament.NextPlayoffRound()
+
+	// Dump mid-playoff
+	data, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament: %v", err)
+	}
+
+	restored, err := LoadTournament(data)
+	if err != nil {
+		t.Fatalf("LoadTournament: %v", err)
+	}
+
+	if restored.GetPlayoffStatus() != "in_progress" {
+		t.Errorf("Expected in_progress after restore, got %s", restored.GetPlayoffStatus())
+	}
+
+	playoff := restored.GetPlayoff()
+	if playoff == nil {
+		t.Fatal("Expected non-nil playoff after restore")
+	}
+	if len(playoff.Seeds) != 4 {
+		t.Errorf("Expected 4 seeds after restore, got %d", len(playoff.Seeds))
+	}
+	if playoff.CurrentRound != 1 {
+		t.Errorf("Expected CurrentRound=1, got %d", playoff.CurrentRound)
+	}
+
+	// Should be able to complete the finals
+	finals := restored.GetPlayoffRound()
+	if len(finals) != 1 {
+		t.Fatalf("Expected 1 final match after restore, got %d", len(finals))
+	}
+	restored.AddPlayoffResult(finals[0].PlayerA(), 2, 0, 0)
+	err = restored.NextPlayoffRound()
+	if err != nil {
+		t.Fatalf("NextPlayoffRound after restore: %v", err)
+	}
+	if restored.GetPlayoffStatus() != "finished" {
+		t.Error("Expected finished after completing restored playoff")
 	}
 }
