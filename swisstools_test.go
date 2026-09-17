@@ -2320,3 +2320,168 @@ func TestDumpLoadPlayoff(t *testing.T) {
 		t.Error("Expected finished after completing restored playoff")
 	}
 }
+
+// enterOneRoundEveryPlayerAWins starts the tournament and gives every player A
+// a 2-0 win. It deliberately does not accumulate standings: NextRound and
+// FinishTournament both call UpdatePlayerStandings themselves, and calling it
+// as well would count every result twice.
+func enterOneRoundEveryPlayerAWins(t *testing.T, tournament *Tournament) {
+	t.Helper()
+	if err := tournament.StartTournament(); err != nil {
+		t.Fatalf("StartTournament: %v", err)
+	}
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			if err := tournament.AddResult(p.PlayerA(), 2, 0, 0); err != nil {
+				t.Fatalf("AddResult: %v", err)
+			}
+		}
+	}
+}
+
+// playOneRoundEveryPlayerAWins enters a round and accumulates it, for tests
+// that need standings without advancing or finishing.
+func playOneRoundEveryPlayerAWins(t *testing.T, tournament *Tournament) {
+	t.Helper()
+	enterOneRoundEveryPlayerAWins(t, tournament)
+	if err := tournament.UpdatePlayerStandings(); err != nil {
+		t.Fatalf("UpdatePlayerStandings: %v", err)
+	}
+}
+
+// TestGetFinalStandingsRanksDroppedPlayerInPlace is the core guarantee: a
+// player who drops is ranked where their points put them, not pushed to the
+// bottom of the list.
+func TestGetFinalStandingsRanksDroppedPlayerInPlace(t *testing.T) {
+	tournament := NewTournament()
+	for _, n := range []string{"Alice", "Bob", "Charlie", "Diana"} {
+		tournament.AddPlayer(n)
+	}
+	playOneRoundEveryPlayerAWins(t, &tournament)
+
+	// Drop the current leader, who is on a win while others are on a loss.
+	leader := tournament.GetStandings()[0]
+	if leader.Points == 0 {
+		t.Fatalf("expected the leader to have points, got %d", leader.Points)
+	}
+	if err := tournament.RemovePlayerById(leader.PlayerID); err != nil {
+		t.Fatalf("RemovePlayerById: %v", err)
+	}
+
+	final := tournament.GetFinalStandings()
+	if len(final) != 4 {
+		t.Fatalf("GetFinalStandings: expected 4 players, got %d", len(final))
+	}
+	if got := len(tournament.GetStandings()); got != 3 {
+		t.Fatalf("GetStandings: expected the dropped player to be omitted, got %d players", got)
+	}
+
+	var dropped *PlayerStanding
+	for i := range final {
+		if final[i].PlayerID == leader.PlayerID {
+			dropped = &final[i]
+		}
+	}
+	if dropped == nil {
+		t.Fatal("GetFinalStandings omitted the dropped player")
+	}
+	if !dropped.Removed {
+		t.Error("expected Removed to be true for the dropped player")
+	}
+	if dropped.RemovedInRound != 1 {
+		t.Errorf("expected RemovedInRound 1, got %d", dropped.RemovedInRound)
+	}
+
+	// The point: they outrank everyone who scored fewer points, rather than
+	// being pinned to the bottom.
+	for _, s := range final {
+		if s.PlayerID == dropped.PlayerID {
+			continue
+		}
+		if s.Points < dropped.Points && s.Rank <= dropped.Rank {
+			t.Errorf("dropped player (rank %d, %d pts) did not outrank %s (rank %d, %d pts)",
+				dropped.Rank, dropped.Points, s.Name, s.Rank, s.Points)
+		}
+	}
+}
+
+// TestGetFinalStandingsMatchesGetStandingsWithoutDrops guards against the
+// refactor changing existing behavior.
+func TestGetFinalStandingsMatchesGetStandingsWithoutDrops(t *testing.T) {
+	tournament := NewTournament()
+	for _, n := range []string{"Alice", "Bob", "Charlie", "Diana", "Eve", "Frank"} {
+		tournament.AddPlayer(n)
+	}
+	playOneRoundEveryPlayerAWins(t, &tournament)
+
+	standings := tournament.GetStandings()
+	final := tournament.GetFinalStandings()
+	if len(standings) != len(final) {
+		t.Fatalf("with no drops, expected identical lengths: %d vs %d", len(standings), len(final))
+	}
+
+	// Compare rank by player ID rather than by slice position. sortedPlayers
+	// ranges over a map and its last-resort tiebreak compares slice indices
+	// mid-sort, so the order *within* a group of tied players is not stable
+	// between calls. The rank each player is assigned is stable, because every
+	// member of a tie group compares equal to its predecessor.
+	ranks := make(map[int]int, len(standings))
+	for _, s := range standings {
+		ranks[s.PlayerID] = s.Rank
+	}
+	for _, s := range final {
+		want, ok := ranks[s.PlayerID]
+		if !ok {
+			t.Errorf("player %d (%s) is in GetFinalStandings but not GetStandings", s.PlayerID, s.Name)
+			continue
+		}
+		if s.Rank != want {
+			t.Errorf("player %d (%s): GetStandings rank %d, GetFinalStandings rank %d",
+				s.PlayerID, s.Name, want, s.Rank)
+		}
+		if s.Removed {
+			t.Errorf("player %s should not be marked removed", s.Name)
+		}
+	}
+}
+
+// TestStartPlayoffNeverSeedsDroppedPlayer is the reason GetStandings still
+// excludes dropped players: the top cut is seeded from it.
+func TestStartPlayoffNeverSeedsDroppedPlayer(t *testing.T) {
+	tournament := NewTournament()
+	for _, n := range []string{"Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Heidi"} {
+		tournament.AddPlayer(n)
+	}
+	// FinishTournament below accumulates the round, so do not do it here too.
+	enterOneRoundEveryPlayerAWins(t, &tournament)
+	if err := tournament.FinishTournament(); err != nil {
+		t.Fatalf("FinishTournament: %v", err)
+	}
+
+	// Drop the leader, who would otherwise be seeded first.
+	leader := tournament.GetStandings()[0]
+	if err := tournament.RemovePlayerById(leader.PlayerID); err != nil {
+		t.Fatalf("RemovePlayerById: %v", err)
+	}
+
+	// They still rank inside the cut on the display view.
+	var finalRank int
+	for _, s := range tournament.GetFinalStandings() {
+		if s.PlayerID == leader.PlayerID {
+			finalRank = s.Rank
+		}
+	}
+	if finalRank == 0 || finalRank > 4 {
+		t.Fatalf("expected the dropped player to rank inside the top 4, got %d", finalRank)
+	}
+
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+
+	for _, seed := range tournament.GetPlayoff().Seeds {
+		if seed == leader.PlayerID {
+			t.Fatalf("dropped player %d was seeded into the playoff", leader.PlayerID)
+		}
+	}
+}

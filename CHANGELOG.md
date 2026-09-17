@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-17
+
+### Added
+
+- **Final standings including dropped players** — `GetFinalStandings()` returns standings with dropped players ranked in place by the same keys as `GetStandings()` (points, then OMW%, GW%, OGW%), rather than omitted. A dropped player falls naturally as the remaining rounds are played, but one who drops while ahead can still rank highly.
+- `PlayerStanding` gained `Removed` and `RemovedInRound`, so callers can flag dropped players in a standings display.
+
+### Changed
+
+- `GetStandings()` is unchanged in behavior and still omits dropped players. It remains the view for deciding who is still competing — `StartPlayoff()` seeds the top cut from it, so a dropped player must never appear there. Use `GetFinalStandings()` for display and for recording results.
+
 ## [0.3.0] - 2026-04-15
 
 ### Added
@@ -35,5 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Versioned JSON dump/load for tournament persistence.
 - Tournament configuration (custom points for win/draw/loss, bye scoring).
 
+[0.4.0]: https://github.com/dstathis/swisstools/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dstathis/swisstools/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/dstathis/swisstools/releases/tag/v0.1.0

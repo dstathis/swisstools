@@ -729,6 +729,13 @@ type PlayerStanding struct {
 	Losses      int
 	Draws       int
 	Tiebreakers TiebreakerData
+
+	// Removed reports whether the player dropped out. Always false in the
+	// results of GetStandings, which omits dropped players entirely; only
+	// GetFinalStandings can report true.
+	Removed bool
+	// RemovedInRound is the round the player dropped in, or 0 if they did not.
+	RemovedInRound int
 }
 
 // calculateTiebreakers calculates all tiebreaker values for a player
@@ -823,12 +830,13 @@ func (t *Tournament) calculateTiebreakers(playerID int) TiebreakerData {
 	}
 }
 
-// getSortedPlayersWithTiebreakers returns player IDs sorted by points and tiebreakers
-func (t *Tournament) getSortedPlayersWithTiebreakers() []int {
+// sortedPlayers returns player IDs sorted by points and tiebreakers. When
+// includeRemoved is false, dropped players are omitted entirely; when true they
+// are ranked in place alongside everyone else using the same sort keys.
+func (t *Tournament) sortedPlayers(includeRemoved bool) []int {
 	var players []int
 	for id, player := range t.players {
-		// Skip removed players
-		if !player.Removed {
+		if includeRemoved || !player.Removed {
 			players = append(players, id)
 		}
 	}
@@ -1028,11 +1036,28 @@ func (t *Tournament) randomPair() error {
 	return nil
 }
 
-// GetStandings returns the current tournament standings with tiebreakers
+// GetStandings returns the current tournament standings with tiebreakers.
+// Dropped players are omitted. This is the competition-critical view: playoff
+// seeding reads it, so a dropped player must never appear here.
 func (t *Tournament) GetStandings() []PlayerStanding {
-	// Get players sorted by points and tiebreakers
-	sortedPlayers := t.getSortedPlayersWithTiebreakers()
+	return t.buildStandings(t.sortedPlayers(false))
+}
 
+// GetFinalStandings returns the tournament standings including players who
+// dropped out, each ranked in place by the same keys as GetStandings rather
+// than pushed to the bottom. Dropped players stop accruing points when they
+// leave, so they generally fall as the remaining rounds are played, but a
+// player who drops while ahead can still rank highly.
+//
+// Use this for display and for recording results. Use GetStandings for
+// anything that decides who is still competing.
+func (t *Tournament) GetFinalStandings() []PlayerStanding {
+	return t.buildStandings(t.sortedPlayers(true))
+}
+
+// buildStandings ranks an already-sorted list of player IDs, giving players
+// with identical points and tiebreakers the same rank.
+func (t *Tournament) buildStandings(sortedPlayers []int) []PlayerStanding {
 	var standings []PlayerStanding
 	nextRank := 1
 
@@ -1063,14 +1088,16 @@ func (t *Tournament) GetStandings() []PlayerStanding {
 		}
 
 		standings = append(standings, PlayerStanding{
-			Rank:        nextRank,
-			PlayerID:    playerID,
-			Name:        player.Name,
-			Points:      player.Points,
-			Wins:        player.Wins,
-			Losses:      player.Losses,
-			Draws:       player.Draws,
-			Tiebreakers: tiebreakers,
+			Rank:           nextRank,
+			PlayerID:       playerID,
+			Name:           player.Name,
+			Points:         player.Points,
+			Wins:           player.Wins,
+			Losses:         player.Losses,
+			Draws:          player.Draws,
+			Tiebreakers:    tiebreakers,
+			Removed:        player.Removed,
+			RemovedInRound: player.RemovedInRound,
 		})
 	}
 
