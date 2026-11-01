@@ -65,9 +65,14 @@ Optional metadata:
 - `GetRound() []Pairing` → current round pairings
 - `GetRoundByNumber(round int) ([]Pairing, error)` → pairings for any round (1-based)
 - `AddResult(id int, wins int, losses int, draws int) error` → add result for the match containing `id`
-- `UpdatePlayerStandings() error` → validates all matches are complete, then updates cumulative stats
+- `UpdatePlayerStandings() error` → validates every active player is paired and every match has results, then updates cumulative stats
 - `NextRound() error` → calls `UpdatePlayerStandings()` and advances the round index; auto-finishes if max rounds reached
 - `FinishTournament() error` → explicitly finish the tournament (records current round standings first)
+
+Manual pairing modification (current round only; pairings with recorded results are protected):
+- `SwapPlayers(idA, idB int) error` → exchange the positions of two currently paired players
+- `SetPairing(idA, idB int) error` → create a new pairing between two unpaired players; pass `BYE_OPPONENT_ID` as `idB` to assign a bye
+- `RemovePairing(id int) error` → delete the pairing containing `id`; both players become unpaired until a follow-up `SetPairing`
 
 ### Standings
 - `GetStandings() []PlayerStanding` → standings sorted by points and tiebreakers
@@ -84,6 +89,11 @@ Optional metadata:
 - `GetPlayoffRoundByNumber(round int) ([]Pairing, error)` → pairings for a given 0-based playoff round
 - `AddPlayoffResult(id int, wins int, losses int, draws int) error` → record result for a playoff match; draws are not allowed (one player must advance)
 - `NextPlayoffRound() error` → validate results, advance winners; finishes playoff when the final is decided
+
+Manual playoff pairing modification (current playoff round only; pairings with recorded results are protected):
+- `SwapPlayoffPlayers(idA, idB int) error` → exchange the positions of two currently paired players in the bracket
+- `SetPlayoffPairing(idA, idB int) error` → re-pair two players previously removed from this round via `RemovePlayoffPairing`; byes are not supported
+- `RemovePlayoffPairing(id int) error` → delete a pairing from this round; both players become unpaired and must be re-paired via `SetPlayoffPairing` before `NextPlayoffRound` will advance the bracket
 
 ### Notes
 - All `Player` fields are exported and readable on values returned by `GetPlayerById`, `GetPlayerByName`, and `GetPlayers`.

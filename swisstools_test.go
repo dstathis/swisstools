@@ -2485,3 +2485,541 @@ func TestStartPlayoffNeverSeedsDroppedPlayer(t *testing.T) {
 		}
 	}
 }
+
+// --- Manual pairing modification API (issue #2) ---
+
+// setupPairedRound builds a tournament with the given names, starts it, and
+// returns it with round 1 paired. Panics via t.Fatal if setup fails.
+func setupPairedRound(t *testing.T, names ...string) Tournament {
+	t.Helper()
+	tournament := NewTournament()
+	for _, n := range names {
+		if err := tournament.AddPlayer(n); err != nil {
+			t.Fatalf("AddPlayer %s: %v", n, err)
+		}
+	}
+	if err := tournament.StartTournament(); err != nil {
+		t.Fatalf("StartTournament: %v", err)
+	}
+	return tournament
+}
+
+func TestSwapPlayersHappyPath(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	round := tournament.GetRound()
+	if len(round) != 2 {
+		t.Fatalf("expected 2 pairings, got %d", len(round))
+	}
+	// Pre-swap: pairings are (p0.playera, p0.playerb) and (p1.playera, p1.playerb)
+	a0, b0 := round[0].playera, round[0].playerb
+	a1, b1 := round[1].playera, round[1].playerb
+
+	if err := tournament.SwapPlayers(b0, b1); err != nil {
+		t.Fatalf("SwapPlayers: %v", err)
+	}
+	after := tournament.GetRound()
+	if after[0].playera != a0 || after[0].playerb != b1 {
+		t.Errorf("pairing 0: want (%d, %d), got (%d, %d)", a0, b1, after[0].playera, after[0].playerb)
+	}
+	if after[1].playera != a1 || after[1].playerb != b0 {
+		t.Errorf("pairing 1: want (%d, %d), got (%d, %d)", a1, b0, after[1].playera, after[1].playerb)
+	}
+}
+
+func TestSwapPlayersWithBye(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie")
+
+	// 3 players: one of them has a bye. Swapping a bye-holder is blocked
+	// because the bye pairing already has a recorded result.
+	var byeID, oppID int
+	for _, p := range tournament.GetRound() {
+		if p.playerb == BYE_OPPONENT_ID {
+			byeID = p.playera
+		} else {
+			oppID = p.playera
+		}
+	}
+	if byeID == 0 || oppID == 0 {
+		t.Fatal("could not find bye and opponent IDs")
+	}
+
+	err := tournament.SwapPlayers(byeID, oppID)
+	if err == nil || err.Error() != "cannot modify pairing with recorded result" {
+		t.Errorf("expected recorded-result error, got %v", err)
+	}
+}
+
+func TestSwapPlayersGuards(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+	round := tournament.GetRound()
+	a0, b0 := round[0].playera, round[0].playerb
+
+	// Self-swap
+	err := tournament.SwapPlayers(a0, a0)
+	if err == nil || err.Error() != "cannot swap a player with themselves" {
+		t.Errorf("self-swap: got %v", err)
+	}
+
+	// Unknown player
+	err = tournament.SwapPlayers(a0, 999)
+	if err == nil || err.Error() != "player not found" {
+		t.Errorf("unknown player: got %v", err)
+	}
+
+	// Facing each other
+	err = tournament.SwapPlayers(a0, b0)
+	if err == nil || err.Error() != "players are already paired against each other" {
+		t.Errorf("same pairing: got %v", err)
+	}
+
+	// Recorded result blocks swap
+	if err := tournament.AddResult(a0, 2, 1, 0); err != nil {
+		t.Fatalf("AddResult: %v", err)
+	}
+	b1 := round[1].playerb
+	err = tournament.SwapPlayers(b0, b1)
+	if err == nil || err.Error() != "cannot modify pairing with recorded result" {
+		t.Errorf("recorded result: got %v", err)
+	}
+}
+
+func TestSwapPlayersBeforePair(t *testing.T) {
+	tournament := NewTournament()
+	tournament.AddPlayer("Alice")
+	tournament.AddPlayer("Bob")
+
+	err := tournament.SwapPlayers(1, 2)
+	if err == nil || err.Error() != "round has no pairings - call Pair() first" {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestSetPairingHappyPath(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	// Remove both pairings, then rebuild one.
+	round := tournament.GetRound()
+	a0, b0 := round[0].playera, round[0].playerb
+	if err := tournament.RemovePairing(a0); err != nil {
+		t.Fatalf("RemovePairing a0: %v", err)
+	}
+	if err := tournament.SetPairing(a0, b0); err != nil {
+		t.Fatalf("SetPairing: %v", err)
+	}
+	after := tournament.GetRound()
+	if len(after) != 2 {
+		t.Fatalf("expected 2 pairings after set, got %d", len(after))
+	}
+	// Find the restored pairing
+	found := false
+	for _, p := range after {
+		if (p.playera == a0 && p.playerb == b0) || (p.playera == b0 && p.playerb == a0) {
+			if p.playeraWins != UNINITIALIZED_RESULT {
+				t.Error("restored pairing should have UNINITIALIZED_RESULT")
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Error("restored pairing not found")
+	}
+}
+
+func TestSetPairingWithBye(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	// Remove Alice's pairing, then set her a bye.
+	if err := tournament.RemovePairing(1); err != nil {
+		t.Fatalf("RemovePairing: %v", err)
+	}
+	if err := tournament.SetPairing(1, BYE_OPPONENT_ID); err != nil {
+		t.Fatalf("SetPairing bye: %v", err)
+	}
+	after := tournament.GetRound()
+	foundBye := false
+	for _, p := range after {
+		if p.playera == 1 && p.playerb == BYE_OPPONENT_ID {
+			if p.playeraWins != BYE_WINS || p.playerbWins != BYE_LOSSES || p.draws != BYE_DRAWS {
+				t.Errorf("bye results wrong: %+v", p)
+			}
+			foundBye = true
+		}
+	}
+	if !foundBye {
+		t.Error("bye pairing not found after SetPairing")
+	}
+}
+
+func TestSetPairingGuards(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	// Self-pair
+	err := tournament.SetPairing(1, 1)
+	if err == nil || err.Error() != "cannot pair a player with themselves" {
+		t.Errorf("self-pair: got %v", err)
+	}
+
+	// Both already paired
+	err = tournament.SetPairing(1, 2)
+	if err == nil || err.Error() != "player already paired - call RemovePairing first" {
+		t.Errorf("already paired: got %v", err)
+	}
+
+	// Unknown player
+	err = tournament.SetPairing(999, 1)
+	if err == nil || err.Error() != "player not found" {
+		t.Errorf("unknown A: got %v", err)
+	}
+
+	// After RemovePairing, pairing against a still-paired player
+	if err := tournament.RemovePairing(1); err != nil {
+		t.Fatalf("RemovePairing: %v", err)
+	}
+	// 1 is unpaired, but 3 (or whichever was in the other pairing) is still paired
+	round := tournament.GetRound()
+	stillPaired := round[0].playera
+	err = tournament.SetPairing(1, stillPaired)
+	if err == nil || err.Error() != "player already paired - call RemovePairing first" {
+		t.Errorf("partner still paired: got %v", err)
+	}
+}
+
+func TestRemovePairingHappyPath(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	before := len(tournament.GetRound())
+	if err := tournament.RemovePairing(1); err != nil {
+		t.Fatalf("RemovePairing: %v", err)
+	}
+	after := len(tournament.GetRound())
+	if after != before-1 {
+		t.Errorf("expected %d pairings, got %d", before-1, after)
+	}
+	// Confirm player 1 is no longer in any pairing
+	for _, p := range tournament.GetRound() {
+		if p.playera == 1 || p.playerb == 1 {
+			t.Error("player 1 still appears in a pairing")
+		}
+	}
+}
+
+func TestRemovePairingGuards(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	err := tournament.RemovePairing(999)
+	if err == nil || err.Error() != "player not found" {
+		t.Errorf("unknown player: got %v", err)
+	}
+
+	if err := tournament.AddResult(1, 2, 1, 0); err != nil {
+		t.Fatalf("AddResult: %v", err)
+	}
+	err = tournament.RemovePairing(1)
+	if err == nil || err.Error() != "cannot modify pairing with recorded result" {
+		t.Errorf("recorded result: got %v", err)
+	}
+}
+
+func TestRemovePairingThenNotPaired(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	if err := tournament.RemovePairing(1); err != nil {
+		t.Fatalf("RemovePairing: %v", err)
+	}
+	err := tournament.RemovePairing(1)
+	if err == nil || err.Error() != "player not currently paired" {
+		t.Errorf("not currently paired: got %v", err)
+	}
+}
+
+func TestRemovePairingBlocksNextRound(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	if err := tournament.RemovePairing(1); err != nil {
+		t.Fatalf("RemovePairing: %v", err)
+	}
+	// Add results for whatever pairings remain
+	for _, p := range tournament.GetRound() {
+		if p.playerb != BYE_OPPONENT_ID {
+			tournament.AddResult(p.playera, 2, 1, 0)
+		}
+	}
+	err := tournament.UpdatePlayerStandings()
+	if err == nil {
+		t.Fatal("expected UpdatePlayerStandings to error on unpaired player")
+	}
+	want := "player 1 (Alice) has no pairing in current round"
+	if err.Error() != want {
+		t.Errorf("got %q, want %q", err.Error(), want)
+	}
+}
+
+func TestManualRepairRoundTrip(t *testing.T) {
+	// RemovePairing on two players, SetPairing them together, play through,
+	// NextRound succeeds and standings reflect the manual pairing.
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	round := tournament.GetRound()
+	a0, b0 := round[0].playera, round[0].playerb
+	a1, b1 := round[1].playera, round[1].playerb
+
+	// Remove both pairings
+	if err := tournament.RemovePairing(a0); err != nil {
+		t.Fatalf("RemovePairing a0: %v", err)
+	}
+	if err := tournament.RemovePairing(a1); err != nil {
+		t.Fatalf("RemovePairing a1: %v", err)
+	}
+	// Pair a0 vs a1, b0 vs b1 (a manual re-pairing)
+	if err := tournament.SetPairing(a0, a1); err != nil {
+		t.Fatalf("SetPairing a0/a1: %v", err)
+	}
+	if err := tournament.SetPairing(b0, b1); err != nil {
+		t.Fatalf("SetPairing b0/b1: %v", err)
+	}
+	for _, p := range tournament.GetRound() {
+		if err := tournament.AddResult(p.playera, 2, 1, 0); err != nil {
+			t.Fatalf("AddResult: %v", err)
+		}
+	}
+	if err := tournament.NextRound(); err != nil {
+		t.Fatalf("NextRound: %v", err)
+	}
+}
+
+func TestUpdatePlayerStandingsSkipsRemoved(t *testing.T) {
+	// A removed player must not trigger the unpaired-player guard.
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie")
+
+	// Charlie has or doesn't have the bye; remove the bye player to
+	// verify that a Removed player doesn't trigger the guard.
+	var byeID int
+	for _, p := range tournament.GetRound() {
+		if p.playerb == BYE_OPPONENT_ID {
+			byeID = p.playera
+		}
+	}
+	if byeID == 0 {
+		t.Fatal("no bye player found")
+	}
+	if err := tournament.RemovePlayerById(byeID); err != nil {
+		t.Fatalf("RemovePlayerById: %v", err)
+	}
+	// Score remaining matches
+	for _, p := range tournament.GetRound() {
+		if p.playerb != BYE_OPPONENT_ID {
+			if err := tournament.AddResult(p.playera, 2, 1, 0); err != nil {
+				t.Fatalf("AddResult: %v", err)
+			}
+		}
+	}
+	if err := tournament.UpdatePlayerStandings(); err != nil {
+		t.Fatalf("UpdatePlayerStandings should succeed with removed player: %v", err)
+	}
+}
+
+func TestUpdatePlayerStandingsAtomicOnUnpaired(t *testing.T) {
+	// When the unpaired-player guard fires, no stats are mutated.
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	// Remove player 1's pairing while results are still unset
+	if err := tournament.RemovePairing(1); err != nil {
+		t.Fatalf("RemovePairing: %v", err)
+	}
+	// Score all remaining pairings
+	for _, p := range tournament.GetRound() {
+		if p.playerb != BYE_OPPONENT_ID {
+			if err := tournament.AddResult(p.playera, 2, 1, 0); err != nil {
+				t.Fatalf("AddResult: %v", err)
+			}
+		}
+	}
+
+	before := map[int]int{}
+	for id, p := range tournament.players {
+		before[id] = p.Points
+	}
+	err := tournament.UpdatePlayerStandings()
+	if err == nil {
+		t.Fatal("expected error on unpaired player")
+	}
+	for id, p := range tournament.players {
+		if p.Points != before[id] {
+			t.Errorf("player %d: points changed from %d to %d despite error", id, before[id], p.Points)
+		}
+	}
+}
+
+// --- Playoff variants ---
+
+func TestSwapPlayoffPlayersHappyPath(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	semis := tournament.GetPlayoffRound()
+	if len(semis) != 2 {
+		t.Fatalf("expected 2 semis, got %d", len(semis))
+	}
+	b0, b1 := semis[0].playerb, semis[1].playerb
+	a0, a1 := semis[0].playera, semis[1].playera
+
+	if err := tournament.SwapPlayoffPlayers(b0, b1); err != nil {
+		t.Fatalf("SwapPlayoffPlayers: %v", err)
+	}
+	after := tournament.GetPlayoffRound()
+	if after[0].playera != a0 || after[0].playerb != b1 {
+		t.Errorf("pairing 0: want (%d, %d), got (%d, %d)", a0, b1, after[0].playera, after[0].playerb)
+	}
+	if after[1].playera != a1 || after[1].playerb != b0 {
+		t.Errorf("pairing 1: want (%d, %d), got (%d, %d)", a1, b0, after[1].playera, after[1].playerb)
+	}
+}
+
+func TestSwapPlayoffPlayersGuards(t *testing.T) {
+	tournament := NewTournament()
+	// No playoff
+	err := tournament.SwapPlayoffPlayers(1, 2)
+	if err == nil || err.Error() != "no playoff started" {
+		t.Errorf("no playoff: got %v", err)
+	}
+
+	tournament = runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	semis := tournament.GetPlayoffRound()
+	a0, b0 := semis[0].playera, semis[0].playerb
+
+	err = tournament.SwapPlayoffPlayers(a0, a0)
+	if err == nil || err.Error() != "cannot swap a player with themselves" {
+		t.Errorf("self-swap: got %v", err)
+	}
+
+	err = tournament.SwapPlayoffPlayers(a0, b0)
+	if err == nil || err.Error() != "players are already paired against each other" {
+		t.Errorf("same pairing: got %v", err)
+	}
+
+	err = tournament.SwapPlayoffPlayers(a0, 9999)
+	if err == nil || err.Error() != "player not currently paired" {
+		t.Errorf("not paired: got %v", err)
+	}
+}
+
+func TestRemovePlayoffPairingAndNextRoundGuard(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	semis := tournament.GetPlayoffRound()
+	a0 := semis[0].playera
+
+	if err := tournament.RemovePlayoffPairing(a0); err != nil {
+		t.Fatalf("RemovePlayoffPairing: %v", err)
+	}
+	// Score the other match
+	remaining := tournament.GetPlayoffRound()
+	if err := tournament.AddPlayoffResult(remaining[0].playera, 2, 0, 0); err != nil {
+		t.Fatalf("AddPlayoffResult: %v", err)
+	}
+	err := tournament.NextPlayoffRound()
+	want := "playoff round has unpaired players - call SetPlayoffPairing to restore pairings"
+	if err == nil || err.Error() != want {
+		t.Errorf("got %v, want %q", err, want)
+	}
+}
+
+func TestSetPlayoffPairingHappyPath(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	semis := tournament.GetPlayoffRound()
+	a0, b0 := semis[0].playera, semis[0].playerb
+	a1, b1 := semis[1].playera, semis[1].playerb
+
+	// Remove both pairings and rebuild them as a0-a1 and b0-b1.
+	if err := tournament.RemovePlayoffPairing(a0); err != nil {
+		t.Fatalf("RemovePlayoffPairing 0: %v", err)
+	}
+	if err := tournament.RemovePlayoffPairing(a1); err != nil {
+		t.Fatalf("RemovePlayoffPairing 1: %v", err)
+	}
+	if err := tournament.SetPlayoffPairing(a0, a1); err != nil {
+		t.Fatalf("SetPlayoffPairing a0/a1: %v", err)
+	}
+	if err := tournament.SetPlayoffPairing(b0, b1); err != nil {
+		t.Fatalf("SetPlayoffPairing b0/b1: %v", err)
+	}
+	if len(tournament.playoff.unpaired) != 0 {
+		t.Errorf("expected unpaired set to be empty, got %v", tournament.playoff.unpaired)
+	}
+	// Score the matches
+	for _, p := range tournament.GetPlayoffRound() {
+		if err := tournament.AddPlayoffResult(p.playera, 2, 0, 0); err != nil {
+			t.Fatalf("AddPlayoffResult: %v", err)
+		}
+	}
+	if err := tournament.NextPlayoffRound(); err != nil {
+		t.Fatalf("NextPlayoffRound: %v", err)
+	}
+}
+
+func TestSetPlayoffPairingRejectsBye(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	semis := tournament.GetPlayoffRound()
+	a0 := semis[0].playera
+	if err := tournament.RemovePlayoffPairing(a0); err != nil {
+		t.Fatalf("RemovePlayoffPairing: %v", err)
+	}
+
+	err := tournament.SetPlayoffPairing(a0, BYE_OPPONENT_ID)
+	if err == nil || err.Error() != "byes are not supported in playoff" {
+		t.Errorf("got %v", err)
+	}
+}
+
+func TestSetPlayoffPairingRequiresRemoved(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	semis := tournament.GetPlayoffRound()
+	a0, a1 := semis[0].playera, semis[1].playera
+
+	// Neither player has been removed from the round
+	err := tournament.SetPlayoffPairing(a0, a1)
+	want := "player not eligible for this playoff round - call RemovePlayoffPairing first"
+	if err == nil || err.Error() != want {
+		t.Errorf("got %v, want %q", err, want)
+	}
+}
+
+func TestRemovePlayoffPairingGuards(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	semis := tournament.GetPlayoffRound()
+	a0 := semis[0].playera
+
+	// Record a result then try to remove
+	if err := tournament.AddPlayoffResult(a0, 2, 0, 0); err != nil {
+		t.Fatalf("AddPlayoffResult: %v", err)
+	}
+	err := tournament.RemovePlayoffPairing(a0)
+	if err == nil || err.Error() != "cannot modify pairing with recorded result" {
+		t.Errorf("recorded result: got %v", err)
+	}
+
+	// Unknown player
+	err = tournament.RemovePlayoffPairing(9999)
+	if err == nil || err.Error() != "player not currently paired" {
+		t.Errorf("not paired: got %v", err)
+	}
+}

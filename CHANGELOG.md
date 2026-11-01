@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-01
+
+### Added
+
+- **Manual pairing modification** — tournament organizers can now adjust pairings within a round without regenerating the whole round:
+  - `SwapPlayers(idA, idB int) error` exchanges two currently paired players' positions.
+  - `SetPairing(idA, idB int) error` pairs two currently unpaired players; passing `BYE_OPPONENT_ID` as `idB` assigns a bye.
+  - `RemovePairing(id int) error` deletes a pairing from the current round; both players become unpaired.
+  - Pairings with already-recorded results are protected from modification.
+- **Manual playoff pairing modification** — the same three operations as `SwapPlayoffPlayers` / `SetPlayoffPairing` / `RemovePlayoffPairing` on the single-elimination bracket. Byes are not supported in the playoff variant; `SetPlayoffPairing` only accepts players that were previously removed from the current bracket round via `RemovePlayoffPairing`.
+
+### Changed
+
+- `UpdatePlayerStandings()` now also validates that every active (non-removed) player has a pairing in the current round, so that `RemovePairing` without a follow-up `SetPairing` is caught instead of silently zeroing a player's round. Flows through to `NextRound()`.
+- `NextPlayoffRound()` now also validates that no players are currently unpaired in the bracket round (set by `RemovePlayoffPairing` and cleared by `SetPlayoffPairing`).
+
 ## [0.4.0] - 2026-09-17
 
 ### Added

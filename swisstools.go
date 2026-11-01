@@ -81,6 +81,11 @@ type Playoff struct {
 	Rounds       []Round // Bracket rounds (index 0 = quarterfinals/first round, last = finals)
 	CurrentRound int     // 0-based index into Rounds
 	Finished     bool
+
+	// Transient: player IDs that were removed from the current bracket round
+	// via RemovePlayoffPairing. Only these IDs may be re-paired via
+	// SetPlayoffPairing; the set is cleared when NextPlayoffRound advances.
+	unpaired map[int]bool
 }
 
 // Decklist represents a player's deck configuration.
@@ -555,6 +560,189 @@ func (t *Tournament) AddResult(id int, wins int, losses int, draws int) error {
 	return errors.New("player not found")
 }
 
+// findPairingIndex returns the index in the current round's pairings where
+// id appears, or -1 if not found.
+func (t *Tournament) findPairingIndex(id int) int {
+	for i, p := range t.rounds[t.currentRound] {
+		if p.playera == id || p.playerb == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// pairingHasResult reports whether a pairing already has a recorded result.
+// Byes are inserted with config-derived results and so count as recorded.
+func pairingHasResult(p Pairing) bool {
+	return p.playeraWins != UNINITIALIZED_RESULT
+}
+
+// requireActivePlayer checks that id refers to an existing, non-removed player.
+func (t *Tournament) requireActivePlayer(id int) error {
+	player, exists := t.players[id]
+	if !exists || player.Removed {
+		return errors.New("player not found")
+	}
+	return nil
+}
+
+// checkCurrentRoundReady returns an error if the current round isn't paired yet.
+func (t *Tournament) checkCurrentRoundReady() error {
+	if t.currentRound >= len(t.rounds) {
+		return errors.New("round not initialized - call NextRound() first")
+	}
+	if len(t.rounds[t.currentRound]) == 0 {
+		return errors.New("round has no pairings - call Pair() first")
+	}
+	return nil
+}
+
+// SwapPlayers exchanges the positions of two currently paired players: idA
+// moves into idB's old pairing and vice versa. The two displaced opponents
+// stay in place.
+//
+// Inputs:
+//   - idA, idB: player IDs; both must be active and currently paired in this round
+//
+// Returns:
+//   - error: non-nil if either player is missing, not paired, already paired
+//     against the other, has a recorded result, or if idA == idB
+func (t *Tournament) SwapPlayers(idA, idB int) error {
+	if err := t.checkCurrentRoundReady(); err != nil {
+		return err
+	}
+	if idA == idB {
+		return errors.New("cannot swap a player with themselves")
+	}
+	if err := t.requireActivePlayer(idA); err != nil {
+		return err
+	}
+	if err := t.requireActivePlayer(idB); err != nil {
+		return err
+	}
+
+	iA := t.findPairingIndex(idA)
+	iB := t.findPairingIndex(idB)
+	if iA == -1 || iB == -1 {
+		return errors.New("player not currently paired")
+	}
+	if iA == iB {
+		return errors.New("players are already paired against each other")
+	}
+	if pairingHasResult(t.rounds[t.currentRound][iA]) || pairingHasResult(t.rounds[t.currentRound][iB]) {
+		return errors.New("cannot modify pairing with recorded result")
+	}
+
+	pA := &t.rounds[t.currentRound][iA]
+	pB := &t.rounds[t.currentRound][iB]
+
+	if pA.playera == idA {
+		pA.playera = idB
+	} else {
+		pA.playerb = idB
+	}
+	if pB.playera == idB {
+		pB.playera = idA
+	} else {
+		pB.playerb = idA
+	}
+
+	return nil
+}
+
+// SetPairing creates a new pairing in the current round between idA and idB.
+// Both players must be currently unpaired in this round. Passing
+// BYE_OPPONENT_ID as idB assigns idA a bye with config-derived results.
+//
+// Inputs:
+//   - idA: active player ID (must be unpaired this round)
+//   - idB: active player ID, or BYE_OPPONENT_ID for a bye
+//
+// Returns:
+//   - error: non-nil if either side is missing, already paired, or idA == idB
+func (t *Tournament) SetPairing(idA, idB int) error {
+	if !t.started {
+		return errors.New("tournament has not started")
+	}
+	if t.currentRound >= len(t.rounds) {
+		return errors.New("round not initialized - call NextRound() first")
+	}
+	if idA == idB {
+		return errors.New("cannot pair a player with themselves")
+	}
+	if err := t.requireActivePlayer(idA); err != nil {
+		return err
+	}
+	if t.findPairingIndex(idA) != -1 {
+		return errors.New("player already paired - call RemovePairing first")
+	}
+
+	if idB == BYE_OPPONENT_ID {
+		t.rounds[t.currentRound] = append(t.rounds[t.currentRound], Pairing{
+			playera:     idA,
+			playerb:     BYE_OPPONENT_ID,
+			playeraWins: t.config.ByeWins,
+			playerbWins: t.config.ByeLosses,
+			draws:       t.config.ByeDraws,
+		})
+		return nil
+	}
+
+	if err := t.requireActivePlayer(idB); err != nil {
+		return err
+	}
+	if t.findPairingIndex(idB) != -1 {
+		return errors.New("player already paired - call RemovePairing first")
+	}
+
+	t.rounds[t.currentRound] = append(t.rounds[t.currentRound], Pairing{
+		playera:     idA,
+		playerb:     idB,
+		playeraWins: UNINITIALIZED_RESULT,
+		playerbWins: UNINITIALIZED_RESULT,
+		draws:       UNINITIALIZED_RESULT,
+	})
+	return nil
+}
+
+// RemovePairing deletes the current-round pairing containing the given player
+// ID. If the opponent is a real player, they also become unpaired and the
+// round is left incomplete until a follow-up SetPairing restores a pairing
+// for them (UpdatePlayerStandings and NextRound will reject the incomplete
+// state).
+//
+// Inputs:
+//   - id: active player ID currently paired in this round
+//
+// Returns:
+//   - error: non-nil if the player is missing, not paired, or the affected
+//     pairing already has a recorded result (byes count as recorded)
+func (t *Tournament) RemovePairing(id int) error {
+	if err := t.checkCurrentRoundReady(); err != nil {
+		return err
+	}
+	if err := t.requireActivePlayer(id); err != nil {
+		return err
+	}
+
+	i := t.findPairingIndex(id)
+	if i == -1 {
+		return errors.New("player not currently paired")
+	}
+	if pairingHasResult(t.rounds[t.currentRound][i]) {
+		return errors.New("cannot modify pairing with recorded result")
+	}
+
+	var newPairings []Pairing
+	for j, p := range t.rounds[t.currentRound] {
+		if j != i {
+			newPairings = append(newPairings, p)
+		}
+	}
+	t.rounds[t.currentRound] = newPairings
+	return nil
+}
+
 func (t *Tournament) GetRound() []Pairing {
 	// Defensive check - should not happen with proper NextRound() usage
 	if t.currentRound >= len(t.rounds) {
@@ -577,7 +765,31 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		return errors.New("round has no pairings - call Pair() first")
 	}
 
-	// FIRST PASS: Validate all matches are complete before updating any stats
+	// FIRST PASS: Every active player must have a pairing in this round.
+	// RemovePairing can leave a player unpaired; catch that before scoring.
+	paired := make(map[int]bool, len(t.rounds[t.currentRound])*2)
+	for _, pairing := range t.rounds[t.currentRound] {
+		paired[pairing.playera] = true
+		if pairing.playerb != BYE_OPPONENT_ID {
+			paired[pairing.playerb] = true
+		}
+	}
+	var unpairedIDs []int
+	for id, player := range t.players {
+		if player.Removed {
+			continue
+		}
+		if !paired[id] {
+			unpairedIDs = append(unpairedIDs, id)
+		}
+	}
+	if len(unpairedIDs) > 0 {
+		sort.Ints(unpairedIDs)
+		firstID := unpairedIDs[0]
+		return fmt.Errorf("player %d (%s) has no pairing in current round", firstID, t.players[firstID].Name)
+	}
+
+	// SECOND PASS: Validate all matches are complete before updating any stats
 	for _, pairing := range t.rounds[t.currentRound] {
 		// Check for incomplete matches (initialized with UNINITIALIZED_RESULT)
 		if pairing.playeraWins == UNINITIALIZED_RESULT || pairing.playerbWins == UNINITIALIZED_RESULT || pairing.draws == UNINITIALIZED_RESULT {
@@ -585,7 +797,7 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		}
 	}
 
-	// SECOND PASS: All matches are complete, now update player stats
+	// THIRD PASS: All matches are complete, now update player stats
 	for _, pairing := range t.rounds[t.currentRound] {
 		// Handle bye rounds (playerb == BYE_OPPONENT_ID)
 		// Byes must be handled separately because there's no opponent to update,
@@ -1262,6 +1474,154 @@ func (t *Tournament) AddPlayoffResult(id int, wins int, losses int, draws int) e
 	return errors.New("player not found in current playoff round")
 }
 
+// findPlayoffPairingIndex returns the index in the current playoff round's
+// pairings where id appears, or -1 if not found.
+func (t *Tournament) findPlayoffPairingIndex(id int) int {
+	for i, p := range t.playoff.Rounds[t.playoff.CurrentRound] {
+		if p.playera == id || p.playerb == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// checkPlayoffReady returns an error if the playoff isn't in a mutable state.
+func (t *Tournament) checkPlayoffReady() error {
+	if t.playoff == nil {
+		return errors.New("no playoff started")
+	}
+	if t.playoff.Finished {
+		return errors.New("playoff is already finished")
+	}
+	return nil
+}
+
+// SwapPlayoffPlayers exchanges the positions of two currently paired players
+// in the current playoff round: idA moves into idB's old pairing and vice
+// versa.
+//
+// Inputs:
+//   - idA, idB: player IDs; both must be currently paired in this playoff round
+//
+// Returns:
+//   - error: non-nil if the playoff isn't active, either player is not paired,
+//     the players already face each other, either pairing has a recorded
+//     result, or idA == idB
+func (t *Tournament) SwapPlayoffPlayers(idA, idB int) error {
+	if err := t.checkPlayoffReady(); err != nil {
+		return err
+	}
+	if idA == idB {
+		return errors.New("cannot swap a player with themselves")
+	}
+
+	iA := t.findPlayoffPairingIndex(idA)
+	iB := t.findPlayoffPairingIndex(idB)
+	if iA == -1 || iB == -1 {
+		return errors.New("player not currently paired")
+	}
+	if iA == iB {
+		return errors.New("players are already paired against each other")
+	}
+	round := t.playoff.Rounds[t.playoff.CurrentRound]
+	if pairingHasResult(round[iA]) || pairingHasResult(round[iB]) {
+		return errors.New("cannot modify pairing with recorded result")
+	}
+
+	pA := &t.playoff.Rounds[t.playoff.CurrentRound][iA]
+	pB := &t.playoff.Rounds[t.playoff.CurrentRound][iB]
+
+	if pA.playera == idA {
+		pA.playera = idB
+	} else {
+		pA.playerb = idB
+	}
+	if pB.playera == idB {
+		pB.playera = idA
+	} else {
+		pB.playerb = idA
+	}
+
+	return nil
+}
+
+// SetPlayoffPairing creates a new pairing in the current playoff round
+// between idA and idB. Both players must have been removed from this round
+// via RemovePlayoffPairing (byes are not supported in single-elimination).
+//
+// Inputs:
+//   - idA, idB: player IDs; both must be in the current round's unpaired set
+//
+// Returns:
+//   - error: non-nil if the playoff isn't active, idB == BYE_OPPONENT_ID,
+//     either player isn't in the unpaired set, or idA == idB
+func (t *Tournament) SetPlayoffPairing(idA, idB int) error {
+	if err := t.checkPlayoffReady(); err != nil {
+		return err
+	}
+	if idB == BYE_OPPONENT_ID {
+		return errors.New("byes are not supported in playoff")
+	}
+	if idA == idB {
+		return errors.New("cannot pair a player with themselves")
+	}
+	if t.playoff.unpaired == nil || !t.playoff.unpaired[idA] || !t.playoff.unpaired[idB] {
+		return errors.New("player not eligible for this playoff round - call RemovePlayoffPairing first")
+	}
+
+	t.playoff.Rounds[t.playoff.CurrentRound] = append(t.playoff.Rounds[t.playoff.CurrentRound], Pairing{
+		playera:     idA,
+		playerb:     idB,
+		playeraWins: UNINITIALIZED_RESULT,
+		playerbWins: UNINITIALIZED_RESULT,
+		draws:       UNINITIALIZED_RESULT,
+	})
+	delete(t.playoff.unpaired, idA)
+	delete(t.playoff.unpaired, idB)
+	return nil
+}
+
+// RemovePlayoffPairing deletes the current playoff round's pairing containing
+// the given player ID. Both players in the removed pairing become unpaired
+// and must be re-paired via SetPlayoffPairing before NextPlayoffRound will
+// advance the bracket.
+//
+// Inputs:
+//   - id: player ID currently paired in this playoff round
+//
+// Returns:
+//   - error: non-nil if the playoff isn't active, the player isn't paired,
+//     or the affected pairing already has a recorded result
+func (t *Tournament) RemovePlayoffPairing(id int) error {
+	if err := t.checkPlayoffReady(); err != nil {
+		return err
+	}
+
+	i := t.findPlayoffPairingIndex(id)
+	if i == -1 {
+		return errors.New("player not currently paired")
+	}
+	round := t.playoff.Rounds[t.playoff.CurrentRound]
+	if pairingHasResult(round[i]) {
+		return errors.New("cannot modify pairing with recorded result")
+	}
+
+	if t.playoff.unpaired == nil {
+		t.playoff.unpaired = make(map[int]bool)
+	}
+	t.playoff.unpaired[round[i].playera] = true
+	t.playoff.unpaired[round[i].playerb] = true
+
+	var newPairings []Pairing
+	for j, p := range round {
+		if j != i {
+			newPairings = append(newPairings, p)
+		}
+	}
+	t.playoff.Rounds[t.playoff.CurrentRound] = newPairings
+	return nil
+}
+
 // NextPlayoffRound validates results, determines winners, and either
 // creates the next round's pairings or finishes the playoff.
 func (t *Tournament) NextPlayoffRound() error {
@@ -1270,6 +1630,10 @@ func (t *Tournament) NextPlayoffRound() error {
 	}
 	if t.playoff.Finished {
 		return errors.New("playoff is already finished")
+	}
+
+	if len(t.playoff.unpaired) > 0 {
+		return errors.New("playoff round has unpaired players - call SetPlayoffPairing to restore pairings")
 	}
 
 	round := t.playoff.Rounds[t.playoff.CurrentRound]
