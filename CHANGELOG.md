@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+
+- **`SetPlayoffPairing()` and `RemovePlayoffPairing()`** — the two communicated through an in-memory set of unpaired players that `DumpTournament()` never wrote, so the documented two-step flow could not be used by a consumer that persists state between operations (issue #4). Removing a pairing and reloading left those players stranded: `SetPlayoffPairing()` rejected the very players it had just freed, and there was no way to put them back.
+  - **Migration:** use `SwapPlayoffPlayers(idA, idB)`. Repeated swaps reach any arrangement of a bracket round's players, so nothing the removed pair could express is lost — a `RemovePlayoffPairing` plus two `SetPlayoffPairing` calls to turn `{a0,b0},{a1,b1}` into `{a0,a1},{b0,b1}` is the single call `SwapPlayoffPlayers(b0, a1)`. Unlike the removed pair, a swap is one atomic change to persisted state, so it is safe to dump and reload between any two bracket operations.
+  - A no-show or concession is a result rather than a deletion: `AddPlayoffResult(survivor, 2, 0, 0)` advances the player who showed up and keeps both names in the bracket record.
+  - The Swiss `SetPairing()` / `RemovePairing()` are unaffected. Their roster is every non-removed player, so a missing pairing is always detectable; a bracket round's roster is not re-derivable, which is the asymmetry behind this change.
+
+### Fixed
+
+- **`NextPlayoffRound()` no longer panics on a bracket round with too few pairings.** It paired winners two at a time through an unguarded index, so an odd number of winners read past the end of the slice — in a top-8 bracket, removing one quarterfinal and reloading produced an `index out of range` panic in the caller's process rather than an error. A round that cannot advance is now rejected with `"playoff round is incomplete - bracket cannot advance"`. A round short by one pairing in a top-4 bracket is rejected too: it leaves a single winner, which previously looked exactly like a champion and finished the playoff from a semifinal. So is an empty round, which previously advanced silently, leaving the playoff `in_progress` on a round with no players in it. No library operation can produce either state now, but a hand-edited dump or direct mutation of the exported `Playoff.Rounds` still can.
+
+### Notes
+
+- The export format is unchanged and this release reads dumps from earlier versions as-is. The fix removes transient state rather than persisting it, so there is nothing new to serialize.
+
 ## [0.6.0] - 2026-11-15
 
 ### Added

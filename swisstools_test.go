@@ -2914,30 +2914,11 @@ func TestSwapPlayoffPlayersGuards(t *testing.T) {
 	}
 }
 
-func TestRemovePlayoffPairingAndNextRoundGuard(t *testing.T) {
-	tournament := runSwissToFinish(t, 8)
-	if err := tournament.StartPlayoff(4); err != nil {
-		t.Fatalf("StartPlayoff: %v", err)
-	}
-	semis := tournament.GetPlayoffRound()
-	a0 := semis[0].playera
-
-	if err := tournament.RemovePlayoffPairing(a0); err != nil {
-		t.Fatalf("RemovePlayoffPairing: %v", err)
-	}
-	// Score the other match
-	remaining := tournament.GetPlayoffRound()
-	if err := tournament.AddPlayoffResult(remaining[0].playera, 2, 0, 0); err != nil {
-		t.Fatalf("AddPlayoffResult: %v", err)
-	}
-	err := tournament.NextPlayoffRound()
-	want := "playoff round has unpaired players - call SetPlayoffPairing to restore pairings"
-	if err == nil || err.Error() != want {
-		t.Errorf("got %v, want %q", err, want)
-	}
-}
-
-func TestSetPlayoffPairingHappyPath(t *testing.T) {
+// TestSwapPlayoffPlayersRebuildsRound rebuilds a bracket round into an entirely
+// different set of pairings with a single swap. This is the rearrangement the
+// removed RemovePlayoffPairing/SetPlayoffPairing pair existed for, reached
+// without the round ever being short.
+func TestSwapPlayoffPlayersRebuildsRound(t *testing.T) {
 	tournament := runSwissToFinish(t, 8)
 	if err := tournament.StartPlayoff(4); err != nil {
 		t.Fatalf("StartPlayoff: %v", err)
@@ -2946,24 +2927,23 @@ func TestSetPlayoffPairingHappyPath(t *testing.T) {
 	a0, b0 := semis[0].playera, semis[0].playerb
 	a1, b1 := semis[1].playera, semis[1].playerb
 
-	// Remove both pairings and rebuild them as a0-a1 and b0-b1.
-	if err := tournament.RemovePlayoffPairing(a0); err != nil {
-		t.Fatalf("RemovePlayoffPairing 0: %v", err)
+	// {a0,b0},{a1,b1} -> {a0,a1},{b0,b1}
+	if err := tournament.SwapPlayoffPlayers(b0, a1); err != nil {
+		t.Fatalf("SwapPlayoffPlayers: %v", err)
 	}
-	if err := tournament.RemovePlayoffPairing(a1); err != nil {
-		t.Fatalf("RemovePlayoffPairing 1: %v", err)
+
+	rebuilt := tournament.GetPlayoffRound()
+	if len(rebuilt) != 2 {
+		t.Fatalf("expected 2 pairings, got %d", len(rebuilt))
 	}
-	if err := tournament.SetPlayoffPairing(a0, a1); err != nil {
-		t.Fatalf("SetPlayoffPairing a0/a1: %v", err)
+	if rebuilt[0].playera != a0 || rebuilt[0].playerb != a1 {
+		t.Errorf("pairing 0: got %d vs %d, want %d vs %d", rebuilt[0].playera, rebuilt[0].playerb, a0, a1)
 	}
-	if err := tournament.SetPlayoffPairing(b0, b1); err != nil {
-		t.Fatalf("SetPlayoffPairing b0/b1: %v", err)
+	if rebuilt[1].playera != b0 || rebuilt[1].playerb != b1 {
+		t.Errorf("pairing 1: got %d vs %d, want %d vs %d", rebuilt[1].playera, rebuilt[1].playerb, b0, b1)
 	}
-	if len(tournament.playoff.unpaired) != 0 {
-		t.Errorf("expected unpaired set to be empty, got %v", tournament.playoff.unpaired)
-	}
-	// Score the matches
-	for _, p := range tournament.GetPlayoffRound() {
+
+	for _, p := range rebuilt {
 		if err := tournament.AddPlayoffResult(p.playera, 2, 0, 0); err != nil {
 			t.Fatalf("AddPlayoffResult: %v", err)
 		}
@@ -2971,62 +2951,115 @@ func TestSetPlayoffPairingHappyPath(t *testing.T) {
 	if err := tournament.NextPlayoffRound(); err != nil {
 		t.Fatalf("NextPlayoffRound: %v", err)
 	}
+	if final := tournament.GetPlayoffRound(); len(final) != 1 {
+		t.Fatalf("expected a 1-pairing final, got %d", len(final))
+	}
 }
 
-func TestSetPlayoffPairingRejectsBye(t *testing.T) {
+// TestSwapPlayoffPlayersSurvivesDumpLoad is the regression test for issue #4.
+// A consumer that persists between operations -- one load, mutate, dump per
+// request -- must be able to adjust bracket pairings. The removed two-step flow
+// could not, because its eligibility set was never serialized.
+func TestSwapPlayoffPlayersSurvivesDumpLoad(t *testing.T) {
 	tournament := runSwissToFinish(t, 8)
 	if err := tournament.StartPlayoff(4); err != nil {
 		t.Fatalf("StartPlayoff: %v", err)
 	}
 	semis := tournament.GetPlayoffRound()
-	a0 := semis[0].playera
-	if err := tournament.RemovePlayoffPairing(a0); err != nil {
-		t.Fatalf("RemovePlayoffPairing: %v", err)
+	a0, b0 := semis[0].playera, semis[0].playerb
+	a1, b1 := semis[1].playera, semis[1].playerb
+
+	if err := tournament.SwapPlayoffPlayers(b0, a1); err != nil {
+		t.Fatalf("SwapPlayoffPlayers: %v", err)
 	}
 
-	err := tournament.SetPlayoffPairing(a0, BYE_OPPONENT_ID)
-	if err == nil || err.Error() != "byes are not supported in playoff" {
-		t.Errorf("got %v", err)
+	data, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament: %v", err)
+	}
+	reloaded, err := LoadTournament(data)
+	if err != nil {
+		t.Fatalf("LoadTournament: %v", err)
+	}
+
+	round := reloaded.GetPlayoffRound()
+	if len(round) != 2 {
+		t.Fatalf("expected 2 pairings after reload, got %d", len(round))
+	}
+	if round[0].playera != a0 || round[0].playerb != a1 {
+		t.Errorf("reloaded pairing 0: got %d vs %d, want %d vs %d", round[0].playera, round[0].playerb, a0, a1)
+	}
+	if round[1].playera != b0 || round[1].playerb != b1 {
+		t.Errorf("reloaded pairing 1: got %d vs %d, want %d vs %d", round[1].playera, round[1].playerb, b0, b1)
+	}
+
+	// Adjust again after the reload: no in-memory state is required.
+	if err := reloaded.SwapPlayoffPlayers(a1, b1); err != nil {
+		t.Fatalf("SwapPlayoffPlayers after reload: %v", err)
+	}
+
+	for _, p := range reloaded.GetPlayoffRound() {
+		if err := reloaded.AddPlayoffResult(p.playera, 2, 0, 0); err != nil {
+			t.Fatalf("AddPlayoffResult: %v", err)
+		}
+	}
+	if err := reloaded.NextPlayoffRound(); err != nil {
+		t.Fatalf("NextPlayoffRound: %v", err)
+	}
+	if final := reloaded.GetPlayoffRound(); len(final) != 1 {
+		t.Fatalf("expected a 1-pairing final, got %d", len(final))
 	}
 }
 
-func TestSetPlayoffPairingRequiresRemoved(t *testing.T) {
-	tournament := runSwissToFinish(t, 8)
-	if err := tournament.StartPlayoff(4); err != nil {
+// TestPlayoffShortRoundDoesNotPanic covers a bracket round holding fewer
+// pairings than its players need. No library call can produce this now, but a
+// consumer can through the pointer GetPlayoff() returns, or by loading a dump
+// written in that shape -- and NextPlayoffRound used to panic on it.
+func TestPlayoffShortRoundDoesNotPanic(t *testing.T) {
+	tournament := runSwissToFinish(t, 16)
+	if err := tournament.StartPlayoff(8); err != nil {
 		t.Fatalf("StartPlayoff: %v", err)
 	}
-	semis := tournament.GetPlayoffRound()
-	a0, a1 := semis[0].playera, semis[1].playera
 
-	// Neither player has been removed from the round
-	err := tournament.SetPlayoffPairing(a0, a1)
-	want := "player not eligible for this playoff round - call RemovePlayoffPairing first"
+	playoff := tournament.GetPlayoff()
+	playoff.Rounds[0] = playoff.Rounds[0][:3]
+
+	for _, p := range tournament.GetPlayoffRound() {
+		if err := tournament.AddPlayoffResult(p.playera, 2, 0, 0); err != nil {
+			t.Fatalf("AddPlayoffResult: %v", err)
+		}
+	}
+
+	// Three winners cannot be paired, and byes are not supported here.
+	err := tournament.NextPlayoffRound()
+	want := "playoff round is incomplete - bracket cannot advance"
 	if err == nil || err.Error() != want {
 		t.Errorf("got %v, want %q", err, want)
 	}
+	if playoff.CurrentRound != 0 {
+		t.Errorf("bracket advanced anyway: CurrentRound = %d", playoff.CurrentRound)
+	}
 }
 
-func TestRemovePlayoffPairingGuards(t *testing.T) {
+// TestPlayoffEmptyRoundCannotAdvance pins the other end of the same guard: an
+// empty bracket round used to advance silently, leaving a playoff still
+// in_progress on a round with no players in it.
+func TestPlayoffEmptyRoundCannotAdvance(t *testing.T) {
 	tournament := runSwissToFinish(t, 8)
 	if err := tournament.StartPlayoff(4); err != nil {
 		t.Fatalf("StartPlayoff: %v", err)
 	}
-	semis := tournament.GetPlayoffRound()
-	a0 := semis[0].playera
 
-	// Record a result then try to remove
-	if err := tournament.AddPlayoffResult(a0, 2, 0, 0); err != nil {
-		t.Fatalf("AddPlayoffResult: %v", err)
-	}
-	err := tournament.RemovePlayoffPairing(a0)
-	if err == nil || err.Error() != "cannot modify pairing with recorded result" {
-		t.Errorf("recorded result: got %v", err)
-	}
+	playoff := tournament.GetPlayoff()
+	playoff.Rounds[0] = nil
 
-	// Unknown player
-	err = tournament.RemovePlayoffPairing(9999)
-	if err == nil || err.Error() != "player not currently paired" {
-		t.Errorf("not paired: got %v", err)
+	err := tournament.NextPlayoffRound()
+	want := "playoff round is incomplete - bracket cannot advance"
+	if err == nil || err.Error() != want {
+		t.Errorf("got %v, want %q", err, want)
+	}
+	if playoff.CurrentRound != 0 || playoff.Finished {
+		t.Errorf("bracket advanced anyway: CurrentRound = %d, finished = %v", playoff.CurrentRound, playoff.Finished)
 	}
 }
 
@@ -3666,5 +3699,35 @@ func TestSetResultDumpLoadRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(beforeDump, afterDump) {
 		t.Error("recompute on the restored copy changed it")
+	}
+}
+
+// TestPlayoffTruncatedRoundCannotCrownChampion is the silent truncation from
+// issue #4: a semifinal round holding one pairing produces one winner, which
+// used to look exactly like a champion and finish the playoff.
+func TestPlayoffTruncatedRoundCannotCrownChampion(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+
+	playoff := tournament.GetPlayoff()
+	playoff.Rounds[0] = playoff.Rounds[0][:1]
+
+	survivor := playoff.Rounds[0][0].playera
+	if err := tournament.AddPlayoffResult(survivor, 2, 0, 0); err != nil {
+		t.Fatalf("AddPlayoffResult: %v", err)
+	}
+
+	err := tournament.NextPlayoffRound()
+	want := "playoff round is incomplete - bracket cannot advance"
+	if err == nil || err.Error() != want {
+		t.Errorf("got %v, want %q", err, want)
+	}
+	if playoff.Finished {
+		t.Error("a semifinal winner was crowned champion")
+	}
+	if tournament.GetPlayoffStatus() != "in_progress" {
+		t.Errorf("status = %s, want in_progress", tournament.GetPlayoffStatus())
 	}
 }

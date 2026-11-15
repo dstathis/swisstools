@@ -81,11 +81,6 @@ type Playoff struct {
 	Rounds       []Round // Bracket rounds (index 0 = quarterfinals/first round, last = finals)
 	CurrentRound int     // 0-based index into Rounds
 	Finished     bool
-
-	// Transient: player IDs that were removed from the current bracket round
-	// via RemovePlayoffPairing. Only these IDs may be re-paired via
-	// SetPlayoffPairing; the set is cleared when NextPlayoffRound advances.
-	unpaired map[int]bool
 }
 
 // Decklist represents a player's deck configuration.
@@ -1710,83 +1705,6 @@ func (t *Tournament) SwapPlayoffPlayers(idA, idB int) error {
 	return nil
 }
 
-// SetPlayoffPairing creates a new pairing in the current playoff round
-// between idA and idB. Both players must have been removed from this round
-// via RemovePlayoffPairing (byes are not supported in single-elimination).
-//
-// Inputs:
-//   - idA, idB: player IDs; both must be in the current round's unpaired set
-//
-// Returns:
-//   - error: non-nil if the playoff isn't active, idB == BYE_OPPONENT_ID,
-//     either player isn't in the unpaired set, or idA == idB
-func (t *Tournament) SetPlayoffPairing(idA, idB int) error {
-	if err := t.checkPlayoffReady(); err != nil {
-		return err
-	}
-	if idB == BYE_OPPONENT_ID {
-		return errors.New("byes are not supported in playoff")
-	}
-	if idA == idB {
-		return errors.New("cannot pair a player with themselves")
-	}
-	if t.playoff.unpaired == nil || !t.playoff.unpaired[idA] || !t.playoff.unpaired[idB] {
-		return errors.New("player not eligible for this playoff round - call RemovePlayoffPairing first")
-	}
-
-	t.playoff.Rounds[t.playoff.CurrentRound] = append(t.playoff.Rounds[t.playoff.CurrentRound], Pairing{
-		playera:     idA,
-		playerb:     idB,
-		playeraWins: UNINITIALIZED_RESULT,
-		playerbWins: UNINITIALIZED_RESULT,
-		draws:       UNINITIALIZED_RESULT,
-	})
-	delete(t.playoff.unpaired, idA)
-	delete(t.playoff.unpaired, idB)
-	return nil
-}
-
-// RemovePlayoffPairing deletes the current playoff round's pairing containing
-// the given player ID. Both players in the removed pairing become unpaired
-// and must be re-paired via SetPlayoffPairing before NextPlayoffRound will
-// advance the bracket.
-//
-// Inputs:
-//   - id: player ID currently paired in this playoff round
-//
-// Returns:
-//   - error: non-nil if the playoff isn't active, the player isn't paired,
-//     or the affected pairing already has a recorded result
-func (t *Tournament) RemovePlayoffPairing(id int) error {
-	if err := t.checkPlayoffReady(); err != nil {
-		return err
-	}
-
-	i := t.findPlayoffPairingIndex(id)
-	if i == -1 {
-		return errors.New("player not currently paired")
-	}
-	round := t.playoff.Rounds[t.playoff.CurrentRound]
-	if pairingHasResult(round[i]) {
-		return errors.New("cannot modify pairing with recorded result")
-	}
-
-	if t.playoff.unpaired == nil {
-		t.playoff.unpaired = make(map[int]bool)
-	}
-	t.playoff.unpaired[round[i].playera] = true
-	t.playoff.unpaired[round[i].playerb] = true
-
-	var newPairings []Pairing
-	for j, p := range round {
-		if j != i {
-			newPairings = append(newPairings, p)
-		}
-	}
-	t.playoff.Rounds[t.playoff.CurrentRound] = newPairings
-	return nil
-}
-
 // NextPlayoffRound validates results, determines winners, and either
 // creates the next round's pairings or finishes the playoff.
 func (t *Tournament) NextPlayoffRound() error {
@@ -1795,10 +1713,6 @@ func (t *Tournament) NextPlayoffRound() error {
 	}
 	if t.playoff.Finished {
 		return errors.New("playoff is already finished")
-	}
-
-	if len(t.playoff.unpaired) > 0 {
-		return errors.New("playoff round has unpaired players - call SetPlayoffPairing to restore pairings")
 	}
 
 	round := t.playoff.Rounds[t.playoff.CurrentRound]
@@ -1819,8 +1733,22 @@ func (t *Tournament) NextPlayoffRound() error {
 		}
 	}
 
-	// If only one winner, that's the champion — playoff is done
+	// A bracket round advances by pairing its winners two at a time, so an
+	// empty or odd set of winners cannot advance -- and byes are not supported
+	// here. No library operation can produce such a round, but a loaded dump or
+	// direct mutation of the exported Playoff.Rounds can, and that must be an
+	// error rather than an out-of-range panic below.
+	if len(winners) == 0 || (len(winners) > 1 && len(winners)%2 != 0) {
+		return errors.New("playoff round is incomplete - bracket cannot advance")
+	}
+
+	// If only one winner, that's the champion — playoff is done. It must be the
+	// last bracket round, otherwise this round was short and the single winner
+	// would be crowned from, say, a semifinal.
 	if len(winners) == 1 {
+		if t.playoff.CurrentRound != len(t.playoff.Rounds)-1 {
+			return errors.New("playoff round is incomplete - bracket cannot advance")
+		}
 		t.playoff.Finished = true
 		return nil
 	}

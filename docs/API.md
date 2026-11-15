@@ -95,16 +95,18 @@ Manual pairing modification (current round only; pairings with recorded results 
 - `AddPlayoffResult(id int, wins int, losses int, draws int) error` → record result for a playoff match; draws are not allowed (one player must advance)
 - `NextPlayoffRound() error` → validate results, advance winners; finishes playoff when the final is decided
 
-Manual playoff pairing modification (current playoff round only; pairings with recorded results are protected):
+Manual playoff pairing modification — the bracket is rearranged, never resized (current playoff round only; pairings with recorded results are protected):
 - `SwapPlayoffPlayers(idA, idB int) error` → exchange the positions of two currently paired players in the bracket
-- `SetPlayoffPairing(idA, idB int) error` → re-pair two players previously removed from this round via `RemovePlayoffPairing`; byes are not supported
-- `RemovePlayoffPairing(id int) error` → delete a pairing from this round; both players become unpaired and must be re-paired via `SetPlayoffPairing` before `NextPlayoffRound` will advance the bracket
 
 ### Notes
 - All `Player` fields are exported and readable on values returned by `GetPlayerById`, `GetPlayerByName`, and `GetPlayers`.
 - Removed players remain in history but are excluded from future pairings.
 - Byes are represented by `playerB == BYE_OPPONENT_ID` in pairings.
 - Playoff seeding uses standard bracket order: seed 1 vs seed N, seed 2 vs seed N-1, etc.
+- Playoff pairings are adjusted by swapping players, so a bracket round always holds every player who belongs to it. Repeated swaps reach any arrangement of the round's players, which is why the bracket has no remove/set pair.
+- The Swiss round does have `RemovePairing` / `SetPairing`, because its roster is "every non-removed player" — a fact about the player list, so a missing pairing is always detectable. A bracket round's roster after the first round is a fact about history that `SetPlayoffResult` may contradict, so a pairing deleted from it could not be reconstructed.
+- Every bracket operation is a single atomic change to persisted state, so a consumer may `DumpTournament` and `LoadTournament` between any two of them.
+- A no-show or concession is a result, not a deletion: `AddPlayoffResult(survivor, 2, 0, 0)` advances the player who showed up and keeps both names in the bracket record. Byes are not supported in the playoff.
 - Playoff matches cannot end in a draw — one player must have more game wins to advance.
 - Corrections never change pairings or bracket structure. `SetResult` does not re-pair any later round — those matches were actually played between those people, so only points, records and tiebreakers move. `SetPlayoffResult` likewise never rebuilds or truncates the bracket, so a correction that flips a semifinal leaves the final recording the players who actually played it.
 - `RecomputeStandings()` is the canonical view of the cumulative totals. Because it treats the in-progress round of an unfinished tournament as not yet applied, it discards a contribution made by calling the additive `UpdatePlayerStandings()` out of band without advancing.
