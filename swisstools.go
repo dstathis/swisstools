@@ -903,6 +903,29 @@ func (t *Tournament) applyRound(r Round) {
 	}
 }
 
+// lastCompletedRound returns the highest round index whose results have been
+// folded into the cumulative player stats: rounds 1..currentRound-1, plus the
+// current round once the tournament is finished -- precisely the rounds
+// UpdatePlayerStandings has been called for. A finished tournament never
+// advances past its last round (NextRound returns at the maxRounds cap before
+// incrementing, FinishTournament never increments), so that round has to be
+// counted explicitly or the final round would be scored but never counted
+// towards tiebreakers. Returns 0 when no round has been completed.
+//
+// This is the only place the rule lives, so that RecomputeStandings and
+// calculateTiebreakers can never disagree about which rounds are history.
+func (t *Tournament) lastCompletedRound() int {
+	last := t.currentRound - 1
+	if t.finished {
+		last = t.currentRound
+	}
+	// Defensive clamp: a hand-edited snapshot could claim a round it lacks.
+	if last >= len(t.rounds) {
+		last = len(t.rounds) - 1
+	}
+	return last
+}
+
 // RecomputeStandings discards every player's Points, Wins, Losses, Draws,
 // GameWins, GameLosses and GameDraws and rebuilds them by replaying the stored
 // results of every completed Swiss round. Name, Notes, Removed, RemovedInRound,
@@ -924,14 +947,7 @@ func (t *Tournament) applyRound(r Round) {
 //   - error: non-nil if a completed round holds an incomplete result, in which
 //     case no player's stats are modified (atomic)
 func (t *Tournament) RecomputeStandings() error {
-	last := t.currentRound - 1
-	if t.finished {
-		last = t.currentRound
-	}
-	// Defensive clamp: a hand-edited snapshot could claim a round it lacks.
-	if last >= len(t.rounds) {
-		last = len(t.rounds) - 1
-	}
+	last := t.lastCompletedRound()
 
 	// Validate every round we are about to replay before mutating anything.
 	for round := 1; round <= last; round++ {
@@ -1074,7 +1090,10 @@ func (t *Tournament) calculateTiebreakers(playerID int) TiebreakerData {
 	opponentMatchWinPcts := []float64{}
 	opponentGameWinPcts := []float64{}
 
-	for round := 1; round < t.currentRound; round++ {
+	// Only completed rounds count: an in-progress round's results are not final,
+	// but a finished tournament's last round is (see lastCompletedRound).
+	last := t.lastCompletedRound()
+	for round := 1; round <= last; round++ {
 		if round >= len(t.rounds) {
 			continue
 		}
@@ -1293,7 +1312,12 @@ func (t *Tournament) findBestOpponent(playerID int, sortedPlayers []int, paired 
 	return -1 // No suitable opponent found
 }
 
-// havePlayedBefore checks if two players have played against each other in previous rounds
+// havePlayedBefore checks if two players have played against each other in previous rounds.
+//
+// The bound here is deliberately exclusive and must not become
+// lastCompletedRound: "previous" means every round before the one being paired,
+// and the current round is the one being built up. Pairing never runs on a
+// finished tournament, so the finished case does not arise.
 func (t *Tournament) havePlayedBefore(playerA, playerB int) bool {
 	for round := 1; round < t.currentRound; round++ {
 		if round >= len(t.rounds) {

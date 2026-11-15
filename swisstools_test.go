@@ -3,6 +3,7 @@ package swisstools
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 )
@@ -3730,4 +3731,287 @@ func TestPlayoffTruncatedRoundCannotCrownChampion(t *testing.T) {
 	if tournament.GetPlayoffStatus() != "in_progress" {
 		t.Errorf("status = %s, want in_progress", tournament.GetPlayoffStatus())
 	}
+}
+
+// --- issue #3: the final round must count towards tiebreakers once finished ---
+
+// nearlyEqual compares tiebreaker percentages, which are averages of floats and
+// so cannot be compared exactly against a hand-computed expectation.
+func nearlyEqual(a, b float64) bool {
+	return math.Abs(a-b) < 1e-9
+}
+
+// forcePairings replaces the current round's pairings with exactly the given
+// ones, so a test can control who plays whom instead of depending on the
+// pairing algorithm's randomness. No pairing may have a result yet, and the
+// round must contain no byes (use an even player count).
+func forcePairings(t *testing.T, tournament *Tournament, pairs ...[2]int) {
+	t.Helper()
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() == BYE_OPPONENT_ID {
+			t.Fatalf("forcePairings: round contains a bye, which cannot be removed")
+		}
+		if err := tournament.RemovePairing(p.PlayerA()); err != nil {
+			t.Fatalf("RemovePairing %d: %v", p.PlayerA(), err)
+		}
+	}
+	for _, pair := range pairs {
+		if err := tournament.SetPairing(pair[0], pair[1]); err != nil {
+			t.Fatalf("SetPairing %d vs %d: %v", pair[0], pair[1], err)
+		}
+	}
+}
+
+// setupControlledFinalRound plays four players through two rounds with fixed
+// pairings and fixed 2-0 results:
+//
+//	round 1: 1 beats 2, 3 beats 4
+//	round 2: 3 beats 1, 2 beats 4
+//
+// Final records: 3 is 2-0, 1 and 2 are both 1-1, 4 is 0-2. Players 1 and 2 end
+// level on points with identical game records, and they played each other in
+// round 1 -- so their round-1 opponent strength is identical too, and only
+// their round-2 opponents (3 at 2-0 versus 4 at 0-2) can order them. That makes
+// the fixture sensitive to whether the final round reaches the tiebreakers.
+//
+// Round 2's results are entered but not applied: the caller picks how the
+// tournament finishes.
+func setupControlledFinalRound(t *testing.T) Tournament {
+	t.Helper()
+	tournament := NewTournament()
+	for _, n := range []string{"Alice", "Bob", "Charlie", "Diana"} {
+		if err := tournament.AddPlayer(n); err != nil {
+			t.Fatalf("AddPlayer %s: %v", n, err)
+		}
+	}
+	if err := tournament.StartTournament(); err != nil {
+		t.Fatalf("StartTournament: %v", err)
+	}
+
+	forcePairings(t, &tournament, [2]int{1, 2}, [2]int{3, 4})
+	if err := tournament.AddResult(1, 2, 0, 0); err != nil {
+		t.Fatalf("AddResult round 1 (1 beats 2): %v", err)
+	}
+	if err := tournament.AddResult(3, 2, 0, 0); err != nil {
+		t.Fatalf("AddResult round 1 (3 beats 4): %v", err)
+	}
+	if err := tournament.NextRound(); err != nil {
+		t.Fatalf("NextRound: %v", err)
+	}
+	if err := tournament.Pair(false); err != nil {
+		t.Fatalf("Pair round 2: %v", err)
+	}
+
+	forcePairings(t, &tournament, [2]int{3, 1}, [2]int{2, 4})
+	if err := tournament.AddResult(3, 2, 0, 0); err != nil {
+		t.Fatalf("AddResult round 2 (3 beats 1): %v", err)
+	}
+	if err := tournament.AddResult(2, 2, 0, 0); err != nil {
+		t.Fatalf("AddResult round 2 (2 beats 4): %v", err)
+	}
+	return tournament
+}
+
+// checkControlledFinalRoundStandings asserts the standings the fixture implies
+// when both rounds count. The expectations are hand-computed, with the 33%
+// floor applied to any opponent below it:
+//
+//	1 (Alice):   3 pts, opponents 2 (1-1) and 3 (2-0) -> (0.5 + 1.0)/2
+//	2 (Bob):     3 pts, opponents 1 (1-1) and 4 (0-2) -> (0.5 + 0.33)/2
+//	3 (Charlie): 6 pts, opponents 4 (0-2) and 1 (1-1) -> (0.33 + 0.5)/2
+//	4 (Diana):   0 pts, opponents 3 (2-0) and 2 (1-1) -> (1.0 + 0.5)/2
+//
+// Game win percentages happen to match match win percentages here because every
+// match was 2-0, so the opponent game win expectations are the same numbers.
+func checkControlledFinalRoundStandings(t *testing.T, standings []PlayerStanding, label string) {
+	t.Helper()
+
+	wantOrder := []int{3, 1, 2, 4}
+	gotOrder := make([]int, 0, len(standings))
+	for _, s := range standings {
+		gotOrder = append(gotOrder, s.PlayerID)
+	}
+	if fmt.Sprint(gotOrder) != fmt.Sprint(wantOrder) {
+		t.Errorf("%s: standings order = %v, want %v", label, gotOrder, wantOrder)
+	}
+
+	want := map[int]struct {
+		rank   int
+		points int
+		gwp    float64
+		omw    float64
+		ogw    float64
+	}{
+		3: {rank: 1, points: 6, gwp: 1.0, omw: (0.33 + 0.5) / 2, ogw: (0.33 + 0.5) / 2},
+		1: {rank: 2, points: 3, gwp: 0.5, omw: (0.5 + 1.0) / 2, ogw: (0.5 + 1.0) / 2},
+		2: {rank: 3, points: 3, gwp: 0.5, omw: (0.5 + 0.33) / 2, ogw: (0.5 + 0.33) / 2},
+		4: {rank: 4, points: 0, gwp: 0.0, omw: (1.0 + 0.5) / 2, ogw: (1.0 + 0.5) / 2},
+	}
+
+	byID := standingsByID(standings)
+	for id, w := range want {
+		got, ok := byID[id]
+		if !ok {
+			t.Errorf("%s: player %d missing from standings", label, id)
+			continue
+		}
+		if got.Rank != w.rank {
+			t.Errorf("%s: player %d rank = %d, want %d", label, id, got.Rank, w.rank)
+		}
+		if got.Points != w.points {
+			t.Errorf("%s: player %d points = %d, want %d", label, id, got.Points, w.points)
+		}
+		if !nearlyEqual(got.Tiebreakers.GameWinPercentage, w.gwp) {
+			t.Errorf("%s: player %d game win %% = %v, want %v", label, id, got.Tiebreakers.GameWinPercentage, w.gwp)
+		}
+		if !nearlyEqual(got.Tiebreakers.OpponentMatchWinPct, w.omw) {
+			t.Errorf("%s: player %d opponent match win %% = %v, want %v", label, id, got.Tiebreakers.OpponentMatchWinPct, w.omw)
+		}
+		if !nearlyEqual(got.Tiebreakers.OpponentGameWinPct, w.ogw) {
+			t.Errorf("%s: player %d opponent game win %% = %v, want %v", label, id, got.Tiebreakers.OpponentGameWinPct, w.ogw)
+		}
+	}
+}
+
+// TestFinishedTournamentTiebreakerValues pins the tiebreaker values and ranks of
+// a finished tournament whose last round is the only thing separating two
+// players level on points. Before issue #3 was fixed, round 2 was excluded and
+// players 1 and 2 came out identical on every key, sharing rank 2.
+func TestFinishedTournamentTiebreakerValues(t *testing.T) {
+	tournament := setupControlledFinalRound(t)
+	tournament.SetMaxRounds(2)
+	if err := tournament.NextRound(); err != nil {
+		t.Fatalf("NextRound: %v", err)
+	}
+	if tournament.GetStatus() != "finished" {
+		t.Fatalf("status = %s, want finished", tournament.GetStatus())
+	}
+	// The whole point of the bug: a finished tournament never advanced past its
+	// last round, so the last round looked like the in-progress one.
+	if tournament.GetCurrentRound() != 2 {
+		t.Fatalf("current round = %d, want 2", tournament.GetCurrentRound())
+	}
+
+	checkControlledFinalRoundStandings(t, tournament.GetStandings(), "GetStandings")
+	checkControlledFinalRoundStandings(t, tournament.GetFinalStandings(), "GetFinalStandings")
+}
+
+// TestFinishTournamentTiebreakerValues covers the other way to finish: an
+// explicit FinishTournament, which also leaves currentRound on the last round.
+func TestFinishTournamentTiebreakerValues(t *testing.T) {
+	tournament := setupControlledFinalRound(t)
+	if err := tournament.FinishTournament(); err != nil {
+		t.Fatalf("FinishTournament: %v", err)
+	}
+	if tournament.GetCurrentRound() != 2 {
+		t.Fatalf("current round = %d, want 2", tournament.GetCurrentRound())
+	}
+
+	checkControlledFinalRoundStandings(t, tournament.GetStandings(), "GetStandings")
+	checkControlledFinalRoundStandings(t, tournament.GetFinalStandings(), "GetFinalStandings")
+}
+
+// TestFinishedTiebreakersMatchExtraRound is the invariant from issue #3: a
+// tournament finished after round 2 must produce the same standings as the same
+// results with a third round opened but unplayed. Entering no new results
+// cannot change the standings, so if advancing the round counter moves anyone,
+// the finished tournament was reading the wrong set of rounds.
+func TestFinishedTiebreakersMatchExtraRound(t *testing.T) {
+	finished := setupControlledFinalRound(t)
+	finished.SetMaxRounds(2)
+	if err := finished.NextRound(); err != nil {
+		t.Fatalf("NextRound (capped): %v", err)
+	}
+
+	advanced := setupControlledFinalRound(t)
+	if err := advanced.NextRound(); err != nil {
+		t.Fatalf("NextRound (uncapped): %v", err)
+	}
+	if advanced.GetCurrentRound() != 3 {
+		t.Fatalf("current round = %d, want 3", advanced.GetCurrentRound())
+	}
+
+	a := finished.GetFinalStandings()
+	b := advanced.GetFinalStandings()
+	if len(a) != len(b) {
+		t.Fatalf("standings length %d != %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i].PlayerID != b[i].PlayerID || a[i].Rank != b[i].Rank {
+			t.Errorf("position %d: finished has player %d at rank %d, advanced has player %d at rank %d",
+				i, a[i].PlayerID, a[i].Rank, b[i].PlayerID, b[i].Rank)
+		}
+		if !nearlyEqual(a[i].Tiebreakers.OpponentMatchWinPct, b[i].Tiebreakers.OpponentMatchWinPct) {
+			t.Errorf("position %d: opponent match win %% %v != %v",
+				i, a[i].Tiebreakers.OpponentMatchWinPct, b[i].Tiebreakers.OpponentMatchWinPct)
+		}
+		if !nearlyEqual(a[i].Tiebreakers.OpponentGameWinPct, b[i].Tiebreakers.OpponentGameWinPct) {
+			t.Errorf("position %d: opponent game win %% %v != %v",
+				i, a[i].Tiebreakers.OpponentGameWinPct, b[i].Tiebreakers.OpponentGameWinPct)
+		}
+	}
+}
+
+// TestSetResultInFinalRoundMovesTiebreakers covers the reason issue #3 matters
+// for result corrections: fixing a final-round result must move tiebreakers and
+// not just points.
+func TestSetResultInFinalRoundMovesTiebreakers(t *testing.T) {
+	tournament := setupControlledFinalRound(t)
+	if err := tournament.FinishTournament(); err != nil {
+		t.Fatalf("FinishTournament: %v", err)
+	}
+
+	before := standingsByID(tournament.GetFinalStandings())
+
+	// Flip round 2's other match: Diana (4) beat Bob (2) after all. Bob drops
+	// from 1-1 to 0-2, which weakens Alice's (1) round-1 opponent, and Diana
+	// rises to 1-1.
+	if err := tournament.SetResult(2, 4, 2, 0, 0); err != nil {
+		t.Fatalf("SetResult: %v", err)
+	}
+	if err := tournament.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings: %v", err)
+	}
+	after := standingsByID(tournament.GetFinalStandings())
+
+	if after[2].Points != 0 {
+		t.Errorf("player 2 points = %d, want 0", after[2].Points)
+	}
+	if after[4].Points != 3 {
+		t.Errorf("player 4 points = %d, want 3", after[4].Points)
+	}
+
+	// Alice's opponents are now 2 (0-2, floored to 0.33) and 3 (2-0). With the
+	// final round excluded this was just 0.33, so the exact value is what pins
+	// the fix.
+	wantAlice := (0.33 + 1.0) / 2
+	if !nearlyEqual(after[1].Tiebreakers.OpponentMatchWinPct, wantAlice) {
+		t.Errorf("player 1 opponent match win %% = %v, want %v",
+			after[1].Tiebreakers.OpponentMatchWinPct, wantAlice)
+	}
+	if nearlyEqual(after[1].Tiebreakers.OpponentMatchWinPct, before[1].Tiebreakers.OpponentMatchWinPct) {
+		t.Errorf("expected player 1's opponent match win %% to move, still %v",
+			after[1].Tiebreakers.OpponentMatchWinPct)
+	}
+}
+
+// TestFinishedTiebreakersSurviveRoundTrip confirms the finished flag carries the
+// behaviour through a dump and reload, since the flag is what tells
+// calculateTiebreakers the last round is history.
+func TestFinishedTiebreakersSurviveRoundTrip(t *testing.T) {
+	tournament := setupControlledFinalRound(t)
+	if err := tournament.FinishTournament(); err != nil {
+		t.Fatalf("FinishTournament: %v", err)
+	}
+
+	data, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament: %v", err)
+	}
+	loaded, err := LoadTournament(data)
+	if err != nil {
+		t.Fatalf("LoadTournament: %v", err)
+	}
+
+	checkControlledFinalRoundStandings(t, loaded.GetFinalStandings(), "after round trip")
 }
