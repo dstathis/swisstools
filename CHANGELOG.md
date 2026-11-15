@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `UpdatePlayerStandings()` is additive and remains so. `RecomputeStandings()` is canonical, and by its rule the in-progress round of an unfinished tournament has not been applied — so it discards a contribution made by calling `UpdatePlayerStandings()` out of band without advancing the round.
 - This release is purely additive: `AddResult()`, `AddPlayoffResult()`, `Pair()`, `NextRound()`, `NextPlayoffRound()` and `UpdatePlayerStandings()` are unchanged, and the export schema stays at version `1.0.0`.
 
+### Fixed
+
+- `TestMinimum33PercentRule` was flaky. It recorded results by pairing position, so a particular random first-round pairing made the player under test lose her matches and the assertions fail. It now records results by player identity, which also makes both of her opponents' raw percentages fall below the floor, so the test actually exercises the rule it is named for. Test-only change; no library behavior is affected.
+
 ## [0.5.0] - 2026-11-01
 
 ### Added

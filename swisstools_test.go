@@ -1250,6 +1250,29 @@ func TestGameTrackingInTiebreakers(t *testing.T) {
 		aliceStanding.Tiebreakers.GameWinPercentage, bobStanding.Tiebreakers.GameWinPercentage)
 }
 
+// recordRoundWinnerElseDraw records every match in the current round so that
+// winnerID wins 2-0 and every other match is drawn 1-1-1. Results are recorded
+// from a named player's perspective rather than from whoever happens to be
+// player A, so callers do not depend on the random pairing order or on which
+// side of a pairing a player lands.
+func recordRoundWinnerElseDraw(t *testing.T, tournament *Tournament, winnerID int) {
+	t.Helper()
+	for _, pairing := range tournament.GetRound() {
+		if pairing.playerb == BYE_OPPONENT_ID {
+			continue
+		}
+		if pairing.playera == winnerID || pairing.playerb == winnerID {
+			if err := tournament.AddResult(winnerID, 2, 0, 0); err != nil {
+				t.Fatalf("AddResult for player %d: %v", winnerID, err)
+			}
+			continue
+		}
+		if err := tournament.AddResult(pairing.playera, 1, 1, 1); err != nil {
+			t.Fatalf("AddResult for drawn match: %v", err)
+		}
+	}
+}
+
 func TestMinimum33PercentRule(t *testing.T) {
 	tournament := NewTournament()
 
@@ -1265,32 +1288,20 @@ func TestMinimum33PercentRule(t *testing.T) {
 		t.Fatalf("Failed to start tournament: %v", err)
 	}
 
-	// Round 1: Create initial records
-	pairings := tournament.GetRound()
-	for _, pairing := range pairings {
-		if pairing.playerb == BYE_OPPONENT_ID {
-			continue
-		}
-
-		// Alice beats Bob, Charlie beats Diana
-		if pairing.playera == 1 { // Alice
-			tournament.AddResult(pairing.playera, 2, 0, 0) // Alice wins 2-0
-		} else if pairing.playera == 2 { // Bob
-			tournament.AddResult(pairing.playera, 0, 2, 0) // Bob loses 0-2
-		} else if pairing.playera == 3 { // Charlie
-			tournament.AddResult(pairing.playera, 2, 0, 0) // Charlie wins 2-0
-		} else if pairing.playera == 4 { // Diana
-			tournament.AddResult(pairing.playera, 0, 2, 0) // Diana loses 0-2
-		}
+	aliceID, ok := tournament.GetPlayerID("Alice")
+	if !ok {
+		t.Fatal("Alice not found")
 	}
 
-	// Update standings for round 1
-	err = tournament.UpdatePlayerStandings()
-	if err != nil {
-		t.Fatalf("Failed to update standings: %v", err)
-	}
+	// Alice wins her match every round and every other match is drawn, so
+	// nobody but Alice ever banks a match win. Her opponents therefore end on
+	// a raw match win percentage of 0 and a raw game win percentage of 1/6,
+	// both below the floor, which is what puts the minimum 33% rule to work.
+	// Pairing is random, so the round is scored by player identity rather than
+	// by pairing position.
+	recordRoundWinnerElseDraw(t, &tournament, aliceID)
 
-	// Advance to round 2
+	// Advance to round 2 (NextRound applies round 1's results)
 	err = tournament.NextRound()
 	if err != nil {
 		t.Fatalf("Failed to advance to round 2: %v", err)
@@ -1302,24 +1313,7 @@ func TestMinimum33PercentRule(t *testing.T) {
 		t.Fatalf("Failed to pair round 2: %v", err)
 	}
 
-	// Round 2: Alice vs Charlie, Bob vs Diana
-	pairings = tournament.GetRound()
-	for _, pairing := range pairings {
-		if pairing.playerb == BYE_OPPONENT_ID {
-			continue
-		}
-
-		// Alice beats Charlie, Bob beats Diana
-		if pairing.playera == 1 { // Alice
-			tournament.AddResult(pairing.playera, 2, 1, 0) // Alice wins 2-1
-		} else if pairing.playera == 2 { // Bob
-			tournament.AddResult(pairing.playera, 2, 0, 0) // Bob wins 2-0
-		} else if pairing.playera == 3 { // Charlie
-			tournament.AddResult(pairing.playera, 1, 2, 0) // Charlie loses 1-2
-		} else if pairing.playera == 4 { // Diana
-			tournament.AddResult(pairing.playera, 0, 2, 0) // Diana loses 0-2
-		}
-	}
+	recordRoundWinnerElseDraw(t, &tournament, aliceID)
 
 	// Update standings for round 2
 	err = tournament.UpdatePlayerStandings()
@@ -1339,13 +1333,13 @@ func TestMinimum33PercentRule(t *testing.T) {
 		}
 	}
 
-	// Alice should have points from her wins (exact number depends on pairing)
-	if aliceStanding.Points < 3 {
-		t.Errorf("Expected Alice to have at least 3 points, got %d", aliceStanding.Points)
+	// Alice won both of her matches
+	if aliceStanding.Points != 6 {
+		t.Errorf("Expected Alice to have 6 points, got %d", aliceStanding.Points)
 	}
 
 	// Alice's opponent match win percentage should be at least 33%
-	// Her opponents (Bob and Charlie) have poor records, but should be boosted to 33%
+	// Her opponents never won a match, but should be boosted to 33%
 	if aliceStanding.Tiebreakers.OpponentMatchWinPct < 0.33 {
 		t.Errorf("Expected Alice's opponent match win percentage to be at least 33%%, got %.3f",
 			aliceStanding.Tiebreakers.OpponentMatchWinPct)
@@ -1354,6 +1348,18 @@ func TestMinimum33PercentRule(t *testing.T) {
 	// Alice's opponent game win percentage should be at least 33%
 	if aliceStanding.Tiebreakers.OpponentGameWinPct < 0.33 {
 		t.Errorf("Expected Alice's opponent game win percentage to be at least 33%%, got %.3f",
+			aliceStanding.Tiebreakers.OpponentGameWinPct)
+	}
+
+	// Both raw percentages are below the floor, so the floor is what produced
+	// these values -- if either stops being clamped, this test is no longer
+	// testing the rule it is named for.
+	if aliceStanding.Tiebreakers.OpponentMatchWinPct != 0.33 {
+		t.Errorf("Expected the 33%% floor to set Alice's opponent match win percentage, got %.3f",
+			aliceStanding.Tiebreakers.OpponentMatchWinPct)
+	}
+	if aliceStanding.Tiebreakers.OpponentGameWinPct != 0.33 {
+		t.Errorf("Expected the 33%% floor to set Alice's opponent game win percentage, got %.3f",
 			aliceStanding.Tiebreakers.OpponentGameWinPct)
 	}
 
