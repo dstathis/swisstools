@@ -6,6 +6,7 @@
 //   - Computing standings with standard tiebreakers
 //   - Dropping/removing players while preserving their history
 //   - Optional player metadata (external ID and structured decklist)
+//   - Correcting a result in an already-completed round and replaying standings
 //   - Versioned JSON dump/load to persist and resume tournaments
 //
 // Quick start:

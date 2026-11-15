@@ -8,6 +8,7 @@ Swiss tournament pairing and standings library for Go.
 - Tiebreakers: opponent match win %, game win %, opponent game win %
 - Drop/remove players while preserving history
 - Optional player metadata: external ID and structured decklist
+- Correct a mis-entered result in an already-completed round and replay standings from stored history
 - Versioned dump/load to JSON for persistence and resume
 
 ## Installation

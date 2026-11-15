@@ -69,6 +69,11 @@ Optional metadata:
 - `NextRound() error` → calls `UpdatePlayerStandings()` and advances the round index; auto-finishes if max rounds reached
 - `FinishTournament() error` → explicitly finish the tournament (records current round standings first)
 
+Result corrections (any round, including rounds already completed):
+- `SetResult(round int, id int, wins int, losses int, draws int) error` → write the result for the match containing `id` in the given 1-based Swiss round; does not touch cumulative stats, so follow it with `RecomputeStandings()`
+- `RecomputeStandings() error` → discard every player's cumulative `Points`/`Wins`/`Losses`/`Draws`/`GameWins`/`GameLosses`/`GameDraws` and rebuild them by replaying the stored results of every completed Swiss round (rounds `1..currentRound-1`, plus the current round once the tournament is finished). Player identity and metadata are preserved
+- `SetPlayoffResult(round int, id int, wins int, losses int, draws int) error` → write the result for the match containing `id` in the given 0-based playoff round, including a round the bracket has already advanced past and a playoff that has already finished
+
 Manual pairing modification (current round only; pairings with recorded results are protected):
 - `SwapPlayers(idA, idB int) error` → exchange the positions of two currently paired players
 - `SetPairing(idA, idB int) error` → create a new pairing between two unpaired players; pass `BYE_OPPONENT_ID` as `idB` to assign a bye
@@ -101,4 +106,7 @@ Manual playoff pairing modification (current playoff round only; pairings with r
 - Byes are represented by `playerB == BYE_OPPONENT_ID` in pairings.
 - Playoff seeding uses standard bracket order: seed 1 vs seed N, seed 2 vs seed N-1, etc.
 - Playoff matches cannot end in a draw — one player must have more game wins to advance.
+- Corrections never change pairings or bracket structure. `SetResult` does not re-pair any later round — those matches were actually played between those people, so only points, records and tiebreakers move. `SetPlayoffResult` likewise never rebuilds or truncates the bracket, so a correction that flips a semifinal leaves the final recording the players who actually played it.
+- `RecomputeStandings()` is the canonical view of the cumulative totals. Because it treats the in-progress round of an unfinished tournament as not yet applied, it discards a contribution made by calling the additive `UpdatePlayerStandings()` out of band without advancing.
+- Tiebreakers and standings derive from the cumulative totals, so they follow `RecomputeStandings()` automatically.
 

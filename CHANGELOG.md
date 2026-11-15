@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-15
+
+### Added
+
+- **Result corrections** — an organizer can fix a mis-entered result in a round that has already been completed, later in the same event or after it is over, and have standings, tiebreakers and final ranks follow:
+  - `SetResult(round, id, wins, losses, draws int) error` writes the game result for the match containing `id` in the given 1-based Swiss round, which may be a round already completed. It does not touch cumulative player stats.
+  - `RecomputeStandings() error` discards every player's `Points`, `Wins`, `Losses`, `Draws`, `GameWins`, `GameLosses` and `GameDraws` and rebuilds them by replaying the stored results of every completed Swiss round (rounds `1..currentRound-1`, plus the current round once the tournament is finished). `Name`, `Notes`, `Removed`, `RemovedInRound`, `ExternalID` and `Decklist` are preserved. It errors without changing anything if a completed round holds an incomplete result, the same atomicity `UpdatePlayerStandings()` already guarantees.
+  - `SetPlayoffResult(round, id, wins, losses, draws int) error` writes the game result for the match containing `id` in the given 0-based playoff round, which may be a round the bracket has already advanced past. Unlike `AddPlayoffResult()`, it also works after the playoff has finished, so a mis-entered final can still be fixed.
+- Byes, dropped players and late entries all replay from stored history with no special case, because `rounds` records what actually happened.
+
+### Notes
+
+- **Corrections do not re-pair.** Correcting round 1 does not re-pair round 2: those matches were actually played between those people, so a correction fixes the record of a game, not the history of who sat down together. Only points, records and tiebreakers move.
+- **Corrections do not rebuild or truncate the bracket.** Correcting a semifinal does not discard or re-pair the final, even when the correction flips who won that semifinal — the bracket then records that the player who lost still advanced, because those two people did play the final. `SetPlayoffResult()` never writes `Playoff.Rounds`, `Playoff.CurrentRound` or `Playoff.Finished`. Correcting the current, not-yet-advanced playoff round needs no special handling: `NextPlayoffRound()` reads it when it advances, so the corrected winner progresses.
+- `UpdatePlayerStandings()` is additive and remains so. `RecomputeStandings()` is canonical, and by its rule the in-progress round of an unfinished tournament has not been applied — so it discards a contribution made by calling `UpdatePlayerStandings()` out of band without advancing the round.
+- This release is purely additive: `AddResult()`, `AddPlayoffResult()`, `Pair()`, `NextRound()`, `NextPlayoffRound()` and `UpdatePlayerStandings()` are unchanged, and the export schema stays at version `1.0.0`.
+
 ## [0.5.0] - 2026-11-01
 
 ### Added
@@ -62,6 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Versioned JSON dump/load for tournament persistence.
 - Tournament configuration (custom points for win/draw/loss, bye scoring).
 
+[0.6.0]: https://github.com/dstathis/swisstools/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/dstathis/swisstools/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/dstathis/swisstools/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/dstathis/swisstools/compare/v0.1.0...v0.3.0
 [0.1.0]: https://github.com/dstathis/swisstools/releases/tag/v0.1.0

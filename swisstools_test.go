@@ -3023,3 +3023,642 @@ func TestRemovePlayoffPairingGuards(t *testing.T) {
 		t.Errorf("not paired: got %v", err)
 	}
 }
+
+// --- Result corrections: SetResult / RecomputeStandings / SetPlayoffResult ---
+
+// setupFinishedTwoRounds plays two rounds with every player A winning 2-0 and
+// finishes the tournament, so a correction to round 1 has both a later round
+// and real tiebreakers to disturb.
+func setupFinishedTwoRounds(t *testing.T, names ...string) Tournament {
+	t.Helper()
+	tournament := NewTournament()
+	for _, n := range names {
+		if err := tournament.AddPlayer(n); err != nil {
+			t.Fatalf("AddPlayer %s: %v", n, err)
+		}
+	}
+	if err := tournament.StartTournament(); err != nil {
+		t.Fatalf("StartTournament: %v", err)
+	}
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			if err := tournament.AddResult(p.PlayerA(), 2, 0, 0); err != nil {
+				t.Fatalf("AddResult round 1: %v", err)
+			}
+		}
+	}
+	if err := tournament.NextRound(); err != nil {
+		t.Fatalf("NextRound: %v", err)
+	}
+	if err := tournament.Pair(false); err != nil {
+		t.Fatalf("Pair round 2: %v", err)
+	}
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			if err := tournament.AddResult(p.PlayerA(), 2, 0, 0); err != nil {
+				t.Fatalf("AddResult round 2: %v", err)
+			}
+		}
+	}
+	if err := tournament.FinishTournament(); err != nil {
+		t.Fatalf("FinishTournament: %v", err)
+	}
+	return tournament
+}
+
+// setupCorrectionFixture plays five players through two finished rounds with a
+// bye (odd count in round 1), a late entry who joins in round 2, and a player
+// dropped mid-round-2. Replay has to reproduce all three with no special case.
+// It returns the tournament, the late entry's ID and the dropped player's ID.
+func setupCorrectionFixture(t *testing.T) (Tournament, int, int) {
+	t.Helper()
+	tournament := NewTournament()
+	for i := 1; i <= 5; i++ {
+		if err := tournament.AddPlayer(fmt.Sprintf("Player%d", i)); err != nil {
+			t.Fatalf("AddPlayer: %v", err)
+		}
+	}
+	if err := tournament.SetPlayerExternalID(1, 10101); err != nil {
+		t.Fatalf("SetPlayerExternalID: %v", err)
+	}
+	if err := tournament.SetPlayerDecklist(1, Decklist{Main: map[string]int{"Island": 20}}); err != nil {
+		t.Fatalf("SetPlayerDecklist: %v", err)
+	}
+	if err := tournament.StartTournament(); err != nil {
+		t.Fatalf("StartTournament: %v", err)
+	}
+	// Round 1: odd player count, so one pairing is a pre-filled bye.
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			if err := tournament.AddResult(p.PlayerA(), 2, 1, 0); err != nil {
+				t.Fatalf("AddResult round 1: %v", err)
+			}
+		}
+	}
+	if err := tournament.NextRound(); err != nil {
+		t.Fatalf("NextRound: %v", err)
+	}
+	// Late entry joins in round 2, so they have no round-1 pairing at all.
+	if err := tournament.AddPlayer("Latecomer"); err != nil {
+		t.Fatalf("AddPlayer late entry: %v", err)
+	}
+	lateID, ok := tournament.GetPlayerID("Latecomer")
+	if !ok {
+		t.Fatal("late entry not found")
+	}
+	if err := tournament.Pair(false); err != nil {
+		t.Fatalf("Pair round 2: %v", err)
+	}
+	// Drop a paired player mid-round; their opponent inherits a bye in place.
+	dropped := tournament.GetRound()[0].playerb
+	if dropped == BYE_OPPONENT_ID {
+		dropped = tournament.GetRound()[0].playera
+	}
+	if err := tournament.RemovePlayerById(dropped); err != nil {
+		t.Fatalf("RemovePlayerById: %v", err)
+	}
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			if err := tournament.AddResult(p.PlayerA(), 2, 0, 1); err != nil {
+				t.Fatalf("AddResult round 2: %v", err)
+			}
+		}
+	}
+	if err := tournament.FinishTournament(); err != nil {
+		t.Fatalf("FinishTournament: %v", err)
+	}
+	return tournament, lateID, dropped
+}
+
+// standingsByID keys standings by player ID for before/after comparison.
+func standingsByID(standings []PlayerStanding) map[int]PlayerStanding {
+	m := make(map[int]PlayerStanding, len(standings))
+	for _, s := range standings {
+		m[s.PlayerID] = s
+	}
+	return m
+}
+
+func TestSetResultCompletedRoundSwapsResult(t *testing.T) {
+	tournament := setupFinishedTwoRounds(t, "Alice", "Bob", "Charlie", "Diana")
+
+	round1, err := tournament.GetRoundByNumber(1)
+	if err != nil {
+		t.Fatalf("GetRoundByNumber(1): %v", err)
+	}
+	winner, loser := round1[0].playera, round1[0].playerb
+	if loser == BYE_OPPONENT_ID {
+		t.Fatal("expected a real opponent in round 1")
+	}
+	// Snapshot round 2 to prove a correction never re-pairs anything.
+	round2Before := append(Round(nil), tournament.rounds[2]...)
+	before := tournament.GetPlayers()
+
+	// Written from the recorded winner's side: they actually lost 0-2.
+	if err := tournament.SetResult(1, winner, 0, 2, 0); err != nil {
+		t.Fatalf("SetResult: %v", err)
+	}
+	if err := tournament.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings: %v", err)
+	}
+	after := tournament.GetPlayers()
+
+	w0, w1 := before[winner], after[winner]
+	if w1.Points != w0.Points-3 || w1.Wins != w0.Wins-1 || w1.Losses != w0.Losses+1 || w1.Draws != w0.Draws {
+		t.Errorf("player %d record did not lose the match: points %d->%d, record %d-%d-%d -> %d-%d-%d",
+			winner, w0.Points, w1.Points, w0.Wins, w0.Losses, w0.Draws, w1.Wins, w1.Losses, w1.Draws)
+	}
+	if w1.GameWins != w0.GameWins-2 || w1.GameLosses != w0.GameLosses+2 || w1.GameDraws != w0.GameDraws {
+		t.Errorf("player %d games did not swap: %d-%d-%d -> %d-%d-%d",
+			winner, w0.GameWins, w0.GameLosses, w0.GameDraws, w1.GameWins, w1.GameLosses, w1.GameDraws)
+	}
+
+	l0, l1 := before[loser], after[loser]
+	if l1.Points != l0.Points+3 || l1.Wins != l0.Wins+1 || l1.Losses != l0.Losses-1 || l1.Draws != l0.Draws {
+		t.Errorf("player %d record did not win the match: points %d->%d, record %d-%d-%d -> %d-%d-%d",
+			loser, l0.Points, l1.Points, l0.Wins, l0.Losses, l0.Draws, l1.Wins, l1.Losses, l1.Draws)
+	}
+	if l1.GameWins != l0.GameWins+2 || l1.GameLosses != l0.GameLosses-2 || l1.GameDraws != l0.GameDraws {
+		t.Errorf("player %d games did not swap: %d-%d-%d -> %d-%d-%d",
+			loser, l0.GameWins, l0.GameLosses, l0.GameDraws, l1.GameWins, l1.GameLosses, l1.GameDraws)
+	}
+
+	// Round 2 was actually played between those people; it must not move.
+	if len(tournament.rounds[2]) != len(round2Before) {
+		t.Fatalf("round 2 pairing count changed: %d -> %d", len(round2Before), len(tournament.rounds[2]))
+	}
+	for i, p := range tournament.rounds[2] {
+		if p != round2Before[i] {
+			t.Errorf("round 2 pairing %d changed: %+v -> %+v", i, round2Before[i], p)
+		}
+	}
+}
+
+func TestSetResultChangesStandingsOrder(t *testing.T) {
+	tournament := setupFinishedTwoRounds(t, "Alice", "Bob", "Charlie", "Diana")
+
+	// Find the round-1 winner who went on to lose round 2: they sit on 3
+	// points, so flipping their round-1 match drops them to 0 and lifts their
+	// opponent above them however the opponent's round 2 went.
+	var x, y int
+	for _, p := range tournament.rounds[1] {
+		if p.playerb == BYE_OPPONENT_ID {
+			continue
+		}
+		if tournament.players[p.playera].Points == 3 {
+			x, y = p.playera, p.playerb
+			break
+		}
+	}
+	if x == 0 {
+		t.Fatal("no round-1 winner on 3 points found")
+	}
+
+	before := standingsByID(tournament.GetStandings())
+	if before[x].Points < before[y].Points {
+		t.Fatalf("precondition: player %d (%d points) should not trail player %d (%d points)",
+			x, before[x].Points, y, before[y].Points)
+	}
+
+	if err := tournament.SetResult(1, y, 2, 0, 0); err != nil {
+		t.Fatalf("SetResult: %v", err)
+	}
+	if err := tournament.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings: %v", err)
+	}
+	after := standingsByID(tournament.GetStandings())
+
+	if after[y].Points <= after[x].Points {
+		t.Errorf("expected player %d to overtake player %d: %d vs %d points",
+			y, x, after[y].Points, after[x].Points)
+	}
+	if after[y].Rank >= after[x].Rank {
+		t.Errorf("expected rank order to flip: player %d rank %d, player %d rank %d",
+			y, after[y].Rank, x, after[x].Rank)
+	}
+
+	// Tiebreakers derive from the cumulative totals, so they follow too.
+	if after[x].Tiebreakers.GameWinPercentage >= before[x].Tiebreakers.GameWinPercentage {
+		t.Errorf("expected game win %% to drop for player %d: %v -> %v",
+			x, before[x].Tiebreakers.GameWinPercentage, after[x].Tiebreakers.GameWinPercentage)
+	}
+	if after[x].Tiebreakers.OpponentMatchWinPct == before[x].Tiebreakers.OpponentMatchWinPct {
+		t.Errorf("expected opponent match win %% to move for player %d, still %v",
+			x, after[x].Tiebreakers.OpponentMatchWinPct)
+	}
+
+	// GetFinalStandings must tell the same story.
+	final := standingsByID(tournament.GetFinalStandings())
+	if final[y].Rank >= final[x].Rank {
+		t.Errorf("GetFinalStandings disagrees: player %d rank %d, player %d rank %d",
+			y, final[y].Rank, x, final[x].Rank)
+	}
+}
+
+func TestRecomputeStandingsIdempotent(t *testing.T) {
+	tournament := setupFinishedTwoRounds(t, "Alice", "Bob", "Charlie", "Diana")
+	incremental := tournament.GetPlayers()
+
+	if err := tournament.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings: %v", err)
+	}
+	first := tournament.GetPlayers()
+	if err := tournament.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings (second call): %v", err)
+	}
+	second := tournament.GetPlayers()
+
+	for id, p := range incremental {
+		q := first[id]
+		if q.Points != p.Points || q.Wins != p.Wins || q.Losses != p.Losses || q.Draws != p.Draws ||
+			q.GameWins != p.GameWins || q.GameLosses != p.GameLosses || q.GameDraws != p.GameDraws {
+			t.Errorf("player %d: replay disagrees with incremental totals: %+v vs %+v", id, p, q)
+		}
+		r := second[id]
+		if r.Points != q.Points || r.Wins != q.Wins || r.Losses != q.Losses || r.Draws != q.Draws ||
+			r.GameWins != q.GameWins || r.GameLosses != q.GameLosses || r.GameDraws != q.GameDraws {
+			t.Errorf("player %d: RecomputeStandings is not idempotent: %+v vs %+v", id, q, r)
+		}
+	}
+}
+
+func TestRecomputeStandingsMatchesIncremental(t *testing.T) {
+	tournament, lateID, dropped := setupCorrectionFixture(t)
+
+	before, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament: %v", err)
+	}
+	if err := tournament.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings: %v", err)
+	}
+	after, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament after recompute: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("replay changed the tournament\nbefore: %s\nafter:  %s", before, after)
+	}
+
+	players := tournament.GetPlayers()
+	late := players[lateID]
+	if late.Wins+late.Losses+late.Draws != 1 {
+		t.Errorf("late entry should have exactly one round of results, got %d-%d-%d",
+			late.Wins, late.Losses, late.Draws)
+	}
+	drop := players[dropped]
+	if drop.Wins+drop.Losses+drop.Draws != 1 {
+		t.Errorf("dropped player's totals should be frozen at one round, got %d-%d-%d",
+			drop.Wins, drop.Losses, drop.Draws)
+	}
+}
+
+func TestRecomputeStandingsPreservesPlayerMetadata(t *testing.T) {
+	tournament, lateID, dropped := setupCorrectionFixture(t)
+
+	before := tournament.GetPlayers()
+	if len(before[lateID].Notes) == 0 {
+		t.Fatal("expected a late-entry note to preserve")
+	}
+	if !before[dropped].Removed || before[dropped].RemovedInRound == 0 {
+		t.Fatal("expected a removed player to preserve")
+	}
+	if before[1].ExternalID == nil || before[1].Decklist == nil {
+		t.Fatal("expected external ID and decklist to preserve")
+	}
+
+	if err := tournament.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings: %v", err)
+	}
+	after := tournament.GetPlayers()
+
+	for id, p := range before {
+		q := after[id]
+		if q.Name != p.Name {
+			t.Errorf("player %d: Name changed %q -> %q", id, p.Name, q.Name)
+		}
+		if len(q.Notes) != len(p.Notes) {
+			t.Errorf("player %d: Notes changed %v -> %v", id, p.Notes, q.Notes)
+		} else {
+			for i := range p.Notes {
+				if q.Notes[i] != p.Notes[i] {
+					t.Errorf("player %d: note %d changed %q -> %q", id, i, p.Notes[i], q.Notes[i])
+				}
+			}
+		}
+		if q.Removed != p.Removed || q.RemovedInRound != p.RemovedInRound {
+			t.Errorf("player %d: removal changed (%v,%d) -> (%v,%d)",
+				id, p.Removed, p.RemovedInRound, q.Removed, q.RemovedInRound)
+		}
+		if (q.ExternalID == nil) != (p.ExternalID == nil) {
+			t.Errorf("player %d: ExternalID presence changed", id)
+		} else if p.ExternalID != nil && *q.ExternalID != *p.ExternalID {
+			t.Errorf("player %d: ExternalID changed %d -> %d", id, *p.ExternalID, *q.ExternalID)
+		}
+		if (q.Decklist == nil) != (p.Decklist == nil) {
+			t.Errorf("player %d: Decklist presence changed", id)
+		} else if p.Decklist != nil && q.Decklist.Main["Island"] != p.Decklist.Main["Island"] {
+			t.Errorf("player %d: Decklist changed", id)
+		}
+	}
+}
+
+func TestRecomputeStandingsAtomicOnIncompleteRound(t *testing.T) {
+	tournament := setupFinishedTwoRounds(t, "Alice", "Bob", "Charlie", "Diana")
+	before := tournament.GetPlayers()
+
+	// Blank a stored result in an already-completed round.
+	tournament.rounds[1][0].playeraWins = UNINITIALIZED_RESULT
+
+	err := tournament.RecomputeStandings()
+	if err == nil {
+		t.Fatal("expected an error for an incomplete result in a completed round")
+	}
+	if !strings.Contains(err.Error(), "incomplete match") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	after := tournament.GetPlayers()
+	for id, p := range before {
+		q := after[id]
+		if q.Points != p.Points || q.Wins != p.Wins || q.Losses != p.Losses || q.Draws != p.Draws ||
+			q.GameWins != p.GameWins || q.GameLosses != p.GameLosses || q.GameDraws != p.GameDraws {
+			t.Errorf("player %d: stats changed despite the error: %+v -> %+v", id, p, q)
+		}
+	}
+}
+
+func TestRecomputeStandingsToleratesSnapshotRoundOverrun(t *testing.T) {
+	// LoadTournament accepts arbitrary JSON, so a snapshot can claim a current
+	// round it has no pairings for. Replay must clamp rather than panic.
+	tournament := setupFinishedTwoRounds(t, "Alice", "Bob", "Charlie", "Diana")
+	data, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament: %v", err)
+	}
+	tampered := strings.Replace(string(data), `"currentRound":2`, `"currentRound":99`, 1)
+	if tampered == string(data) {
+		t.Fatal("expected to find currentRound in the snapshot")
+	}
+	restored, err := LoadTournament([]byte(tampered))
+	if err != nil {
+		t.Fatalf("LoadTournament: %v", err)
+	}
+
+	if err := restored.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings on overrun snapshot: %v", err)
+	}
+	// Every stored round still got replayed.
+	for id, p := range tournament.GetPlayers() {
+		q, ok := restored.GetPlayerById(id)
+		if !ok {
+			t.Fatalf("player %d missing after load", id)
+		}
+		if q.Points != p.Points || q.Wins != p.Wins || q.Losses != p.Losses {
+			t.Errorf("player %d: expected the stored rounds to replay, got %+v vs %+v", id, p, q)
+		}
+	}
+}
+
+func TestSetResultErrors(t *testing.T) {
+	tournament := setupPairedRound(t, "Alice", "Bob", "Charlie", "Diana")
+
+	if err := tournament.SetResult(0, 1, 2, 0, 0); err == nil {
+		t.Error("expected an error for round 0")
+	}
+	if err := tournament.SetResult(len(tournament.rounds), 1, 2, 0, 0); err == nil {
+		t.Error("expected an error for a round past the end")
+	}
+
+	// Advance so that the new current round exists but has no pairings yet.
+	for _, p := range tournament.GetRound() {
+		if p.PlayerB() != BYE_OPPONENT_ID {
+			if err := tournament.AddResult(p.PlayerA(), 2, 0, 0); err != nil {
+				t.Fatalf("AddResult: %v", err)
+			}
+		}
+	}
+	if err := tournament.NextRound(); err != nil {
+		t.Fatalf("NextRound: %v", err)
+	}
+	if err := tournament.SetResult(2, 1, 2, 0, 0); err == nil {
+		t.Error("expected an error for a round with no pairings")
+	}
+	if err := tournament.SetResult(1, 999, 2, 0, 0); err == nil {
+		t.Error("expected an error for a player not in that round")
+	}
+	for _, counts := range [][3]int{{-1, 0, 0}, {0, -1, 0}, {0, 0, -1}} {
+		if err := tournament.SetResult(1, 1, counts[0], counts[1], counts[2]); err == nil {
+			t.Errorf("expected an error for negative game counts %v", counts)
+		}
+	}
+	for i, p := range tournament.rounds[1] {
+		if p.playeraWins < 0 || p.playerbWins < 0 || p.draws < 0 {
+			t.Errorf("rejected counts were written to round 1 pairing %d: %+v", i, p)
+		}
+	}
+}
+
+func TestSetResultPlayerB(t *testing.T) {
+	tournament := setupFinishedTwoRounds(t, "Alice", "Bob", "Charlie", "Diana")
+
+	target := tournament.rounds[1][0].playerb
+	if target == BYE_OPPONENT_ID {
+		t.Fatal("expected a real opponent in round 1")
+	}
+	if err := tournament.SetResult(1, target, 2, 1, 0); err != nil {
+		t.Fatalf("SetResult: %v", err)
+	}
+	p := tournament.rounds[1][0]
+	if p.playerbWins != 2 || p.playeraWins != 1 || p.draws != 0 {
+		t.Errorf("side-B write did not swap perspective: a=%d b=%d draws=%d",
+			p.playeraWins, p.playerbWins, p.draws)
+	}
+}
+
+func TestSetPlayoffResultAdvancedRoundLeavesBracketIntact(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	for _, p := range tournament.GetPlayoffRound() {
+		if err := tournament.AddPlayoffResult(p.PlayerA(), 2, 1, 0); err != nil {
+			t.Fatalf("AddPlayoffResult semi: %v", err)
+		}
+	}
+	if err := tournament.NextPlayoffRound(); err != nil {
+		t.Fatalf("NextPlayoffRound: %v", err)
+	}
+
+	playoff := tournament.GetPlayoff()
+	roundsBefore := len(playoff.Rounds)
+	currentBefore := playoff.CurrentRound
+	finalsBefore := append(Round(nil), playoff.Rounds[1]...)
+	semiWinner := playoff.Rounds[0][0].playera
+
+	// Flip the first semifinal: the recorded loser actually won it.
+	if err := tournament.SetPlayoffResult(0, semiWinner, 1, 2, 0); err != nil {
+		t.Fatalf("SetPlayoffResult: %v", err)
+	}
+	corrected := playoff.Rounds[0][0]
+	if corrected.playeraWins != 1 || corrected.playerbWins != 2 {
+		t.Errorf("semifinal not corrected: a=%d b=%d", corrected.playeraWins, corrected.playerbWins)
+	}
+
+	// Bracket structure is off limits.
+	if len(playoff.Rounds) != roundsBefore {
+		t.Errorf("Rounds length changed: %d -> %d", roundsBefore, len(playoff.Rounds))
+	}
+	if playoff.CurrentRound != currentBefore {
+		t.Errorf("CurrentRound changed: %d -> %d", currentBefore, playoff.CurrentRound)
+	}
+	if playoff.Finished {
+		t.Error("SetPlayoffResult must not finish the playoff")
+	}
+	if len(playoff.Rounds[1]) != len(finalsBefore) {
+		t.Fatalf("final pairing count changed: %d -> %d", len(finalsBefore), len(playoff.Rounds[1]))
+	}
+	for i, p := range playoff.Rounds[1] {
+		if p != finalsBefore[i] {
+			t.Errorf("final pairing %d changed: %+v -> %+v", i, finalsBefore[i], p)
+		}
+	}
+	// Those two people did play the final: the now-loser still advanced.
+	if playoff.Rounds[1][0].playera != semiWinner && playoff.Rounds[1][0].playerb != semiWinner {
+		t.Errorf("expected player %d to still appear in the final", semiWinner)
+	}
+}
+
+func TestSetPlayoffResultOnFinishedPlayoff(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	for _, p := range tournament.GetPlayoffRound() {
+		if err := tournament.AddPlayoffResult(p.PlayerA(), 2, 1, 0); err != nil {
+			t.Fatalf("AddPlayoffResult semi: %v", err)
+		}
+	}
+	if err := tournament.NextPlayoffRound(); err != nil {
+		t.Fatalf("NextPlayoffRound: %v", err)
+	}
+	finals := tournament.GetPlayoffRound()
+	if err := tournament.AddPlayoffResult(finals[0].PlayerA(), 2, 0, 0); err != nil {
+		t.Fatalf("AddPlayoffResult final: %v", err)
+	}
+	if err := tournament.NextPlayoffRound(); err != nil {
+		t.Fatalf("NextPlayoffRound final: %v", err)
+	}
+	if tournament.GetPlayoffStatus() != "finished" {
+		t.Fatalf("expected a finished playoff, got %s", tournament.GetPlayoffStatus())
+	}
+
+	playoff := tournament.GetPlayoff()
+	currentBefore := playoff.CurrentRound
+	champion := playoff.Rounds[1][0].playera
+	runnerUp := playoff.Rounds[1][0].playerb
+
+	// AddPlayoffResult refuses a finished playoff; SetPlayoffResult is the
+	// correction path precisely so a mis-entered final can still be fixed.
+	if err := tournament.AddPlayoffResult(champion, 0, 2, 0); err == nil {
+		t.Error("expected AddPlayoffResult to refuse a finished playoff")
+	}
+	// Written from the runner-up's side: they actually won 2-0.
+	if err := tournament.SetPlayoffResult(1, runnerUp, 2, 0, 0); err != nil {
+		t.Fatalf("SetPlayoffResult on finished playoff: %v", err)
+	}
+	if playoff.Rounds[1][0].playeraWins != 0 || playoff.Rounds[1][0].playerbWins != 2 {
+		t.Errorf("final not corrected: %+v", playoff.Rounds[1][0])
+	}
+	if !playoff.Finished {
+		t.Error("SetPlayoffResult must not clear Finished")
+	}
+	if playoff.CurrentRound != currentBefore {
+		t.Errorf("CurrentRound changed: %d -> %d", currentBefore, playoff.CurrentRound)
+	}
+}
+
+func TestSetPlayoffResultErrors(t *testing.T) {
+	tournament := runSwissToFinish(t, 8)
+
+	if err := tournament.SetPlayoffResult(0, 1, 2, 0, 0); err == nil {
+		t.Error("expected an error with no playoff started")
+	}
+	if err := tournament.StartPlayoff(4); err != nil {
+		t.Fatalf("StartPlayoff: %v", err)
+	}
+	seed := tournament.GetPlayoff().Seeds[0]
+
+	if err := tournament.SetPlayoffResult(-1, seed, 2, 0, 0); err == nil {
+		t.Error("expected an error for a negative playoff round")
+	}
+	if err := tournament.SetPlayoffResult(len(tournament.GetPlayoff().Rounds), seed, 2, 0, 0); err == nil {
+		t.Error("expected an error for a playoff round past the end")
+	}
+	// Round 1 (the final) is not paired until the semis are played.
+	if err := tournament.SetPlayoffResult(1, seed, 2, 0, 0); err == nil {
+		t.Error("expected an error for a playoff round with no pairings")
+	}
+	if err := tournament.SetPlayoffResult(0, 999, 2, 0, 0); err == nil {
+		t.Error("expected an error for a player not in that playoff round")
+	}
+	if err := tournament.SetPlayoffResult(0, seed, -1, 0, 0); err == nil {
+		t.Error("expected an error for negative game counts")
+	}
+}
+
+func TestSetResultDumpLoadRoundTrip(t *testing.T) {
+	tournament := setupFinishedTwoRounds(t, "Alice", "Bob", "Charlie", "Diana")
+
+	target := tournament.rounds[1][0].playerb
+	if err := tournament.SetResult(1, target, 2, 0, 0); err != nil {
+		t.Fatalf("SetResult: %v", err)
+	}
+	if err := tournament.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings: %v", err)
+	}
+
+	data, err := tournament.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament: %v", err)
+	}
+	restored, err := LoadTournament(data)
+	if err != nil {
+		t.Fatalf("LoadTournament: %v", err)
+	}
+
+	got, err := restored.GetRoundByNumber(1)
+	if err != nil {
+		t.Fatalf("GetRoundByNumber(1): %v", err)
+	}
+	if got[0].playerbWins != 2 || got[0].playeraWins != 0 {
+		t.Errorf("correction did not survive the round trip: a=%d b=%d",
+			got[0].playeraWins, got[0].playerbWins)
+	}
+	for id, p := range tournament.GetPlayers() {
+		q, ok := restored.GetPlayerById(id)
+		if !ok {
+			t.Fatalf("player %d missing after load", id)
+		}
+		if q.Points != p.Points || q.Wins != p.Wins || q.Losses != p.Losses || q.Draws != p.Draws ||
+			q.GameWins != p.GameWins || q.GameLosses != p.GameLosses || q.GameDraws != p.GameDraws {
+			t.Errorf("player %d: totals did not survive the round trip: %+v vs %+v", id, p, q)
+		}
+	}
+
+	// Recomputing the restored copy is a no-op.
+	beforeDump, err := restored.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament (restored): %v", err)
+	}
+	if err := restored.RecomputeStandings(); err != nil {
+		t.Fatalf("RecomputeStandings (restored): %v", err)
+	}
+	afterDump, err := restored.DumpTournament()
+	if err != nil {
+		t.Fatalf("DumpTournament (restored, after recompute): %v", err)
+	}
+	if !bytes.Equal(beforeDump, afterDump) {
+		t.Error("recompute on the restored copy changed it")
+	}
+}

@@ -560,6 +560,51 @@ func (t *Tournament) AddResult(id int, wins int, losses int, draws int) error {
 	return errors.New("player not found")
 }
 
+// SetResult writes the game-level result for the match containing the given
+// player ID in the given 1-based Swiss round, which may be a round that has
+// already been completed. Provide games won/lost/drawn from the perspective of
+// the specified player, as with AddResult.
+//
+// Cumulative player stats are not touched; call RecomputeStandings afterward to
+// rebuild points, records and tiebreakers from the corrected history. Pairings
+// are left alone -- correcting a round never re-pairs any later round.
+//
+// Inputs:
+//   - round: 1-based Swiss round number
+//   - id: player ID appearing in a pairing of that round (may be a removed player)
+//   - wins, losses, draws: games won/lost/drawn by that player; must not be negative
+//
+// Returns:
+//   - error: non-nil if the round is out of range, has no pairings, holds no
+//     match for id, or any game count is negative
+func (t *Tournament) SetResult(round int, id int, wins int, losses int, draws int) error {
+	if round < 1 || round >= len(t.rounds) {
+		return fmt.Errorf("round %d out of range", round)
+	}
+	if len(t.rounds[round]) == 0 {
+		return errors.New("round has no pairings - call Pair() first")
+	}
+	if wins < 0 || losses < 0 || draws < 0 {
+		return errors.New("game counts must not be negative")
+	}
+
+	for i, pairing := range t.rounds[round] {
+		if pairing.playera == id {
+			t.rounds[round][i].playeraWins = wins
+			t.rounds[round][i].playerbWins = losses
+			t.rounds[round][i].draws = draws
+			return nil
+		}
+		if pairing.playerb == id {
+			t.rounds[round][i].playerbWins = wins
+			t.rounds[round][i].playeraWins = losses
+			t.rounds[round][i].draws = draws
+			return nil
+		}
+	}
+	return errors.New("player not found")
+}
+
 // findPairingIndex returns the index in the current round's pairings where
 // id appears, or -1 if not found.
 func (t *Tournament) findPairingIndex(id int) int {
@@ -797,8 +842,18 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		}
 	}
 
-	// THIRD PASS: All matches are complete, now update player stats
-	for _, pairing := range t.rounds[t.currentRound] {
+	// THIRD PASS: All matches are complete, now apply them
+	t.applyRound(t.rounds[t.currentRound])
+
+	return nil
+}
+
+// applyRound folds one round's results into the cumulative player stats. The
+// round must already have been validated as complete; byes are scored from the
+// tournament config. This is the only place the scoring rules live, so that
+// UpdatePlayerStandings and RecomputeStandings can never disagree.
+func (t *Tournament) applyRound(r Round) {
+	for _, pairing := range r {
 		// Handle bye rounds (playerb == BYE_OPPONENT_ID)
 		// Byes must be handled separately because there's no opponent to update,
 		// and the bye player automatically gets a match win with predetermined game scores
@@ -850,6 +905,65 @@ func (t *Tournament) UpdatePlayerStandings() error {
 		// Update players in the map
 		t.players[pairing.playera] = playerA
 		t.players[pairing.playerb] = playerB
+	}
+}
+
+// RecomputeStandings discards every player's Points, Wins, Losses, Draws,
+// GameWins, GameLosses and GameDraws and rebuilds them by replaying the stored
+// results of every completed Swiss round. Name, Notes, Removed, RemovedInRound,
+// ExternalID and Decklist are preserved. Call this after correcting a stored
+// result with SetResult; tiebreakers and standings derive from these totals and
+// so follow automatically.
+//
+// Completed means rounds 1..currentRound-1, plus the current round once the
+// tournament is finished -- precisely the rounds UpdatePlayerStandings has been
+// called for. Pairings are never changed: a correction fixes the record of a
+// game, not the history of who played whom.
+//
+// Note that UpdatePlayerStandings is exported, so a caller may fold the
+// in-progress round into the totals without advancing. RecomputeStandings is
+// canonical and discards such an out-of-band contribution, because by its rule
+// the in-progress round of an unfinished tournament has not been applied.
+//
+// Returns:
+//   - error: non-nil if a completed round holds an incomplete result, in which
+//     case no player's stats are modified (atomic)
+func (t *Tournament) RecomputeStandings() error {
+	last := t.currentRound - 1
+	if t.finished {
+		last = t.currentRound
+	}
+	// Defensive clamp: a hand-edited snapshot could claim a round it lacks.
+	if last >= len(t.rounds) {
+		last = len(t.rounds) - 1
+	}
+
+	// Validate every round we are about to replay before mutating anything.
+	for round := 1; round <= last; round++ {
+		for _, pairing := range t.rounds[round] {
+			if pairing.playeraWins == UNINITIALIZED_RESULT || pairing.playerbWins == UNINITIALIZED_RESULT || pairing.draws == UNINITIALIZED_RESULT {
+				return fmt.Errorf("incomplete match found in round %d - all matches must have results", round)
+			}
+		}
+	}
+
+	// Zero the cumulative fields, preserving identity and metadata.
+	for id, player := range t.players {
+		player.Points = 0
+		player.Wins = 0
+		player.Losses = 0
+		player.Draws = 0
+		player.GameWins = 0
+		player.GameLosses = 0
+		player.GameDraws = 0
+		t.players[id] = player
+	}
+
+	// Replay history. A round with no pairings contributes nothing; a player
+	// who dropped or joined late simply has no pairings in the rounds they
+	// were not part of, so no special case is needed.
+	for round := 1; round <= last; round++ {
+		t.applyRound(t.rounds[round])
 	}
 
 	return nil
@@ -1472,6 +1586,57 @@ func (t *Tournament) AddPlayoffResult(id int, wins int, losses int, draws int) e
 		}
 	}
 	return errors.New("player not found in current playoff round")
+}
+
+// SetPlayoffResult writes the game-level result for the match containing the
+// given player ID in the given 0-based playoff round, which may be a round the
+// bracket has already advanced past, and may be set after the playoff has
+// finished. Provide games won/lost/drawn from the perspective of the specified
+// player, as with AddPlayoffResult.
+//
+// Bracket structure is never touched: Rounds, CurrentRound and Finished are
+// left exactly as they were, so later rounds keep the players who actually
+// played them even when the correction flips who won this match. Correcting the
+// current, not-yet-advanced round needs no special handling -- NextPlayoffRound
+// reads it when it advances, so the corrected winner progresses.
+//
+// Inputs:
+//   - round: 0-based playoff round index
+//   - id: player ID appearing in a pairing of that round
+//   - wins, losses, draws: games won/lost/drawn by that player; must not be negative
+//
+// Returns:
+//   - error: non-nil if no playoff has been started, the round is out of range,
+//     has no pairings, holds no match for id, or any game count is negative
+func (t *Tournament) SetPlayoffResult(round int, id int, wins int, losses int, draws int) error {
+	if t.playoff == nil {
+		return errors.New("no playoff started")
+	}
+	if round < 0 || round >= len(t.playoff.Rounds) {
+		return fmt.Errorf("playoff round %d out of range", round)
+	}
+	if len(t.playoff.Rounds[round]) == 0 {
+		return fmt.Errorf("playoff round %d has no pairings", round)
+	}
+	if wins < 0 || losses < 0 || draws < 0 {
+		return errors.New("game counts must not be negative")
+	}
+
+	for i, pairing := range t.playoff.Rounds[round] {
+		if pairing.playera == id {
+			t.playoff.Rounds[round][i].playeraWins = wins
+			t.playoff.Rounds[round][i].playerbWins = losses
+			t.playoff.Rounds[round][i].draws = draws
+			return nil
+		}
+		if pairing.playerb == id {
+			t.playoff.Rounds[round][i].playerbWins = wins
+			t.playoff.Rounds[round][i].playeraWins = losses
+			t.playoff.Rounds[round][i].draws = draws
+			return nil
+		}
+	}
+	return errors.New("player not found in playoff round")
 }
 
 // findPlayoffPairingIndex returns the index in the current playoff round's
